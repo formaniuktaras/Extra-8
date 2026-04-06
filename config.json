@@ -1,0 +1,11 @@
+{
+  "source_directory": "data/source",
+  "output_directory": "data/output",
+  "index_file": "data/index/person_index.sqlite3",
+  "theme": "Світла",
+  "validation": {
+    "check_source_exists": true,
+    "check_output_directory": true,
+    "check_index_parent": true
+  }
+}

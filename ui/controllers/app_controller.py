@@ -6,12 +6,12 @@ from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import QObject, QThread, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QColor, QDesktopServices, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 
-from infra.docx.docx_reader import read_docx
+from services.preview_service import EXTRACT_UNAVAILABLE_TEXT, PreviewService, SOURCE_READ_ERROR_TEXT
+from services.preview_types import StructuredPreview
 from ui.models.progress_state import ProgressState
-from ui.workers.file_load_worker import FileLoadWorker
 from ui.workers.indexing_worker import IndexingWorker
 from ui.workers.quick_check_worker import QuickCheckWorker
 from ui.workers.worker_manager import WorkerManager
@@ -24,6 +24,10 @@ class AppController(QObject):
         self.progress_state = ProgressState()
         self.worker_manager = WorkerManager()
         self._current_preview_source: Path | None = None
+        self.preview_service = PreviewService(self.win.indexing_service.output_root)
+        self.win.search_tab.extract_preview.setPlainText("Оберіть витяг")
+        self.win.data_tab.full_preview.setPlainText("Оберіть документ")
+        self.win.data_tab.extract_preview.setPlainText("Оберіть витяг")
         self._wire_signals()
 
     def _wire_signals(self) -> None:
@@ -49,6 +53,7 @@ class AppController(QObject):
         d.deleteRequested.connect(self.delete_selected)
         d.openFolderRequested.connect(self.open_selected_containing_folder)
         d.extractSelectionChanged.connect(self._data_extract_selected)
+        d.highlightToggled.connect(self._data_highlight_toggled)
 
         self.win.progress_dialog.btn_cancel.clicked.connect(self.cancel_current_worker)
         self.win.progress_dialog.btn_copy.clicked.connect(self.win.progress_dialog.copy_errors_to_clipboard)
@@ -73,29 +78,24 @@ class AppController(QObject):
             return
         extracts = self.win.search_service.list_extracts(row["person_name_norm"])
         self.win.extracts_model.set_items(extracts)
+        if not extracts:
+            self.win.search_tab.extract_preview.setPlainText("Оберіть витяг")
+            self.win.search_tab.summary_preview.setPlainText("")
         self.win.statusBar().showMessage(f"Особа: {row['person_name']}. Витягів: {len(extracts)}")
 
     def extract_selected(self, index) -> None:
         item = index.data(role=256)
         if not item:
+            self.win.search_tab.extract_preview.setPlainText("Оберіть витяг")
+            self.win.search_tab.summary_preview.setPlainText("")
             return
-        extract_path = Path(self.win.indexing_service.output_root) / item["generated_rel"]
-        preview_text = ""
-        if extract_path.exists():
-            try:
-                preview_text = "\n".join(p.text for p in read_docx(extract_path).paragraphs if p.text)
-            except Exception:
-                preview_text = ""
+        preview_text = self.preview_service.get_extract_preview(item)
         if not preview_text:
-            source_abs = item.get("source_abs")
-            if source_abs and Path(source_abs).exists():
-                src_doc = read_docx(Path(source_abs))
-                blocks = set(json.loads(item.get("paragraphs_json", "[]")))
-                preview_text = "\n".join(p.text for p in src_doc.paragraphs if p.block_index in blocks)
-            if not preview_text:
-                preview_text = "\n".join(item.get("paragraphs_text", []))
+            preview_text = EXTRACT_UNAVAILABLE_TEXT
         self.win.search_tab.extract_preview.setPlainText(preview_text)
         self.win.search_tab.summary_preview.setPlainText(item.get("summary_text") or "")
+        if self.preview_service.last_extract_mode != "generated":
+            self.win.statusBar().showMessage("Відображено резервний текст без generated DOCX")
 
     def open_generated_extract(self, index) -> None:
         item = index.data(role=256)
@@ -272,17 +272,19 @@ class AppController(QObject):
         p = Path(self.win.source_model.filePath(index))
         if not p.is_file() or p.suffix.lower() != ".docx":
             return
-        worker = FileLoadWorker(p)
         self._current_preview_source = p
-        worker.finished.connect(lambda txt: self.win.data_tab.full_preview.setPlainText(txt))
-        worker.finished.connect(lambda _txt: self._load_extract_preview_for_path(p))
-        self._start_worker(worker, "run")
+        self.win.data_tab.full_preview.setPlainText("Завантаження...")
+        full_text = self.preview_service.get_source_preview(p)
+        self.win.data_tab.full_preview.setPlainText(full_text)
+        self._load_extract_preview_for_path(p)
 
     def _load_extract_preview_for_path(self, source_path: Path) -> None:
         rel = source_path.relative_to(self.win.source_root).as_posix().lower()
         docs = self.win.search_service.list_extracts_for_source(rel)
         if not docs:
-            self.win.data_tab.extract_preview.setPlainText("")
+            self.win.data_tab.extracts_info_label.setText("Для цього документа витягів не знайдено")
+            self.win.data_tab.extract_preview.setPlainText("Оберіть витяг")
+            self._render_source_preview(StructuredPreview(paragraphs=[], plain_text=self.preview_service.get_source_preview(source_path)))
             return
         self.win.data_tab.set_extract_items(docs)
         self._render_data_extract_by_index(0, source_path)
@@ -292,18 +294,45 @@ class AppController(QObject):
             return
         self._render_data_extract_by_index(idx, self._current_preview_source)
 
+    def _data_highlight_toggled(self, _enabled: bool) -> None:
+        if self._current_preview_source is None:
+            return
+        self._render_data_extract_by_index(self.win.data_tab.extracts_list.currentRow(), self._current_preview_source)
+
     def _render_data_extract_by_index(self, idx: int, source_path: Path) -> None:
         extract = self.win.data_tab.current_extract(idx)
         if not extract:
-            self.win.data_tab.extract_preview.setPlainText("")
+            self.win.data_tab.extract_preview.setPlainText("Оберіть витяг")
+            self._render_source_preview(self.preview_service.build_highlighted_source_preview(source_path, []))
             return
-        indices = set(json.loads(extract.get("paragraphs_json", "[]")))
-        src_doc = read_docx(source_path)
-        selected = [p.text for p in src_doc.paragraphs if p.block_index in indices]
-        text = "\n".join(selected).strip() or "\n".join(extract.get("paragraphs_text", []))
-        self.win.data_tab.extract_preview.setPlainText(text)
-        highlighted = []
-        for p in src_doc.paragraphs:
-            prefix = ">> " if p.block_index in indices else "   "
-            highlighted.append(f"{prefix}{p.text}")
-        self.win.data_tab.full_preview.setPlainText("\n".join(highlighted))
+        extract_text = self.preview_service.get_extract_preview(extract)
+        self.win.data_tab.extract_preview.setPlainText(extract_text or "Витяг відсутній")
+        try:
+            selected_indices = json.loads(extract.get("paragraphs_json") or "[]")
+            if not isinstance(selected_indices, list):
+                selected_indices = []
+        except Exception:
+            selected_indices = []
+        structured = self.preview_service.build_highlighted_source_preview(source_path, selected_indices)
+        self._render_source_preview(structured)
+        if self.preview_service.last_extract_mode != "generated":
+            self.win.statusBar().showMessage("Відображено резервний текст без generated DOCX")
+
+    def _render_source_preview(self, structured: StructuredPreview) -> None:
+        panel = self.win.data_tab.full_preview
+        panel.setPlainText(structured.plain_text or SOURCE_READ_ERROR_TEXT)
+        if not self.win.data_tab.highlight_checkbox.isChecked() or not structured.paragraphs:
+            return
+        doc = panel.document()
+        block = doc.begin()
+        highlight_format = QTextCharFormat()
+        highlight_format.setBackground(QColor("#fff2a8"))
+        selected_flags = [p.is_selected for p in structured.paragraphs if p.text]
+        index = 0
+        while block.isValid() and index < len(selected_flags):
+            if selected_flags[index]:
+                cursor = QTextCursor(block)
+                cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+                cursor.mergeCharFormat(highlight_format)
+            index += 1
+            block = block.next()

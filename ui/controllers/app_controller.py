@@ -2,9 +2,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import time
-import traceback
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
@@ -13,34 +10,11 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 
 from infra.docx.docx_reader import read_docx
+from ui.models.progress_state import ProgressState
 from ui.workers.file_load_worker import FileLoadWorker
 from ui.workers.indexing_worker import IndexingWorker
 from ui.workers.quick_check_worker import QuickCheckWorker
-
-
-@dataclass(slots=True)
-class ProgressState:
-    started_at: float = field(default_factory=time.monotonic)
-    processed: int = 0
-    total: int = 0
-    warnings: list[str] = field(default_factory=list)
-    errors: list[str] = field(default_factory=list)
-    log_lines: list[str] = field(default_factory=list)
-
-    def elapsed(self) -> float:
-        return max(0.0, time.monotonic() - self.started_at)
-
-    def throughput(self) -> float:
-        elapsed = self.elapsed()
-        return self.processed / elapsed if elapsed > 0 else 0.0
-
-    def eta_seconds(self) -> float | None:
-        if self.total <= 0 or self.processed <= 0:
-            return None
-        rate = self.throughput()
-        if rate <= 0:
-            return None
-        return max(0.0, (self.total - self.processed) / rate)
+from ui.workers.worker_manager import WorkerManager
 
 
 class AppController(QObject):
@@ -48,11 +22,8 @@ class AppController(QObject):
         super().__init__(main_window)
         self.win = main_window
         self.progress_state = ProgressState()
-        self._index_worker: IndexingWorker | None = None
-        self._quick_worker: QuickCheckWorker | None = None
-        self._load_worker: FileLoadWorker | None = None
+        self.worker_manager = WorkerManager()
         self._current_preview_source: Path | None = None
-        self._active_threads: dict[int, QThread] = {}
         self._wire_signals()
 
     def _wire_signals(self) -> None:
@@ -225,74 +196,87 @@ class AppController(QObject):
     def _start_worker(self, worker, slot_name: str, on_done: Callable[[], None] | None = None) -> None:
         thread = QThread(self.win)
         worker.moveToThread(thread)
-        worker_id = id(worker)
-        self._active_threads[worker_id] = thread
         thread.started.connect(getattr(worker, slot_name))
-        worker.finished.connect(thread.quit)
-        worker.cancelled.connect(thread.quit)
-        worker.errorOccurred.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        worker.cancelled.connect(worker.deleteLater)
-        worker.errorOccurred.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(lambda: self._active_threads.pop(worker_id, None))
+
+        self.worker_manager.register(worker, thread)
+
         if on_done is not None:
             worker.finished.connect(lambda _result: on_done())
             worker.cancelled.connect(on_done)
             worker.errorOccurred.connect(lambda _m, _t: on_done())
+
         worker.errorOccurred.connect(self._on_worker_error)
-        worker.statusChanged.connect(self.win.progress_dialog.status_label.setText)
-        worker.detailChanged.connect(self.win.progress_dialog.detail_label.setText)
-        worker.logMessage.connect(lambda m, lvl: self.win.progress_dialog.append_log(m, lvl))
+        worker.statusChanged.connect(self._on_worker_status)
+        worker.detailChanged.connect(self._on_worker_detail)
+        worker.logMessage.connect(self._on_worker_log)
         worker.progressChanged.connect(self._on_worker_progress)
+        worker.finished.connect(self._on_worker_finished)
+        worker.cancelled.connect(self._on_worker_cancelled)
+
         thread.start()
 
     def rebuild_index(self) -> None:
-        self.progress_state = ProgressState()
+        self.progress_state = ProgressState(status="Індексація...")
         self.win.progress_dialog.reset(self.progress_state)
         self.win.progress_dialog.show()
-        self._index_worker = IndexingWorker(self.win.indexing_service)
-        self._index_worker.finished.connect(lambda _r: self.win.statusBar().showMessage("Індексацію завершено"))
-        self._index_worker.finished.connect(self._complete_progress_dialog)
-        self._index_worker.cancelled.connect(lambda: self.win.statusBar().showMessage("Індексацію скасовано"))
-        self._index_worker.cancelled.connect(
-            lambda: self.win.progress_dialog.mark_cancelled(self.progress_state.processed, self.progress_state.total)
-        )
-        self._start_worker(self._index_worker, "run_full")
+        worker = IndexingWorker(self.win.indexing_service)
+        worker.finished.connect(lambda _r: self.win.statusBar().showMessage("Індексацію завершено"))
+        worker.cancelled.connect(lambda: self.win.statusBar().showMessage("Індексацію скасовано"))
+        self._start_worker(worker, "run_full")
 
     def quick_check(self) -> None:
-        self._quick_worker = QuickCheckWorker(self.win.indexing_service)
-        self._quick_worker.finished.connect(
+        worker = QuickCheckWorker(self.win.indexing_service)
+        worker.finished.connect(
             lambda d: self.win.statusBar().showMessage(f"Нові: {d['new']}, змінені: {d['changed']}, видалені: {d['removed']}")
         )
-        self._start_worker(self._quick_worker, "run")
+        self._start_worker(worker, "run")
 
     def cancel_current_worker(self) -> None:
-        for worker in [self._index_worker, self._quick_worker, self._load_worker]:
-            if worker is not None:
-                worker.request_cancel()
+        self.worker_manager.cancel_all()
 
-    def _on_worker_progress(self, processed: int, total: int) -> None:
-        self.progress_state.processed = processed
-        self.progress_state.total = total
-        self.win.progress_dialog.update_state(self.progress_state)
-        self.win.statusBar().showMessage(f"Індексація: {processed}/{total}")
+    def _on_worker_status(self, text: str) -> None:
+        self.progress_state.set_status(text)
+        self.win.progress_dialog.refresh_ui()
+
+    def _on_worker_detail(self, text: str) -> None:
+        self.progress_state.set_detail(text)
+        self.win.progress_dialog.refresh_ui()
+
+    def _on_worker_log(self, message: str, level: str) -> None:
+        self.progress_state.add_log(message, level)
+        self.win.progress_dialog.refresh_ui()
+
+    def _on_worker_progress(self, current: int, total: int) -> None:
+        self.progress_state.set_progress(current, total)
+        self.win.progress_dialog.refresh_ui()
+        self.win.statusBar().showMessage(f"Індексація: {current}/{total}")
 
     def _on_worker_error(self, message: str, trace: str) -> None:
-        self.progress_state.errors.append(message)
-        self.win.progress_dialog.append_error(message)
-        self.win.progress_dialog.append_log(trace)
+        self.progress_state.add_error(message)
+        self.progress_state.add_log(trace, "ERROR")
+        self.win.progress_dialog.refresh_ui()
         QMessageBox.critical(self.win, "Помилка", message)
+
+    def _on_worker_finished(self, _result: object) -> None:
+        self.progress_state.mark_finished()
+        self.win.progress_dialog.refresh_ui()
+
+    def _on_worker_cancelled(self) -> None:
+        self.progress_state.mark_cancelled()
+        remaining = max(0, self.progress_state.total - self.progress_state.current)
+        self.progress_state.set_status("Скасовано")
+        self.progress_state.set_detail(f"Оброблено: {self.progress_state.current}; Залишилось: {remaining}")
+        self.win.progress_dialog.refresh_ui()
 
     def load_selected_file_preview(self, index) -> None:
         p = Path(self.win.source_model.filePath(index))
         if not p.is_file() or p.suffix.lower() != ".docx":
             return
-        self._load_worker = FileLoadWorker(p)
+        worker = FileLoadWorker(p)
         self._current_preview_source = p
-        self._load_worker.finished.connect(lambda txt: self.win.data_tab.full_preview.setPlainText(txt))
-        self._load_worker.finished.connect(lambda _txt: self._load_extract_preview_for_path(p))
-        self._start_worker(self._load_worker, "run")
+        worker.finished.connect(lambda txt: self.win.data_tab.full_preview.setPlainText(txt))
+        worker.finished.connect(lambda _txt: self._load_extract_preview_for_path(p))
+        self._start_worker(worker, "run")
 
     def _load_extract_preview_for_path(self, source_path: Path) -> None:
         rel = source_path.relative_to(self.win.source_root).as_posix().lower()
@@ -323,9 +307,3 @@ class AppController(QObject):
             prefix = ">> " if p.block_index in indices else "   "
             highlighted.append(f"{prefix}{p.text}")
         self.win.data_tab.full_preview.setPlainText("\n".join(highlighted))
-
-    def _complete_progress_dialog(self) -> None:
-        if self.progress_state.errors:
-            self.win.progress_dialog.mark_completed_with_errors(self.progress_state.errors)
-        else:
-            self.win.progress_dialog.mark_completed()

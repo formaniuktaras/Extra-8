@@ -26,6 +26,9 @@ class BaseWorker(QObject):
     def is_cancel_requested(self) -> bool:
         return self._cancel_requested
 
+    def cancel(self) -> None:
+        self.request_cancel()
+
     def _emit_error(self, exc: Exception) -> None:
         self.errorOccurred.emit(str(exc), traceback.format_exc())
 

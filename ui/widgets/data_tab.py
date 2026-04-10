@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QListWidget, QPushButton, QSplitter, QToolBar, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QLabel, QListWidget, QPushButton, QSplitter, QToolBar, QVBoxLayout, QWidget
 
 from ui.widgets.preview_panel import PreviewPanel
 from ui.widgets.source_tree_panel import SourceTreePanel
@@ -17,6 +17,7 @@ class DataTab(QWidget):
     deleteRequested = Signal()
     openFolderRequested = Signal()
     extractSelectionChanged = Signal(int)
+    highlightToggled = Signal(bool)
 
     def __init__(self) -> None:
         super().__init__()
@@ -44,11 +45,20 @@ class DataTab(QWidget):
         self.tree = SourceTreePanel()
         self.full_preview = PreviewPanel("Документ цілком")
         self.extract_preview = PreviewPanel("Вміст витягу")
+        self.extracts_info_label = QLabel("Оберіть документ")
+        self.highlight_checkbox = QCheckBox("Підсвічувати абзаци витягу")
+        self.highlight_checkbox.setChecked(True)
         self.extracts_list = QListWidget()
         self._extract_items: list[dict] = []
 
         right = QSplitter(Qt.Vertical)
-        right.addWidget(self.extracts_list)
+        extracts_box = QWidget()
+        extracts_layout = QVBoxLayout(extracts_box)
+        extracts_layout.setContentsMargins(0, 0, 0, 0)
+        extracts_layout.addWidget(self.extracts_info_label)
+        extracts_layout.addWidget(self.highlight_checkbox)
+        extracts_layout.addWidget(self.extracts_list)
+        right.addWidget(extracts_box)
         right.addWidget(self.full_preview)
         right.addWidget(self.extract_preview)
 
@@ -69,12 +79,19 @@ class DataTab(QWidget):
         self.btn_rename.clicked.connect(self.renameRequested)
         self.btn_delete.clicked.connect(self.deleteRequested)
         self.extracts_list.currentRowChanged.connect(self.extractSelectionChanged)
+        self.highlight_checkbox.toggled.connect(self.highlightToggled)
 
     def set_extract_items(self, extracts: list[dict]) -> None:
         self._extract_items = extracts
         self.extracts_list.clear()
+        self.extracts_info_label.setText(f"Для цього документа знайдено {len(extracts)} витягів")
         for item in extracts:
-            self.extracts_list.addItem(item.get("generated_rel", "extract"))
+            person = item.get("person_name") or "Без П.І.Б."
+            summary = (item.get("summary_text") or "").strip()
+            short_summary = (summary[:80] + "…") if len(summary) > 80 else summary
+            line = person if not short_summary else f"{person} — {short_summary}"
+            self.extracts_list.addItem(line)
+            self.extracts_list.item(self.extracts_list.count() - 1).setToolTip(item.get("generated_rel", ""))
         if extracts:
             self.extracts_list.setCurrentRow(0)
 

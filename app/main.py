@@ -16,6 +16,7 @@ def main() -> int:
         search_service=deps["search_service"],
         diagnostics_service=deps["diagnostics_service"],
         settings_service=deps["settings_service"],
+        app_config_service=deps["app_config_service"],
         source_root=deps["source_root"],
     )
     win.show()

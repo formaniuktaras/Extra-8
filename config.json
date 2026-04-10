@@ -1,0 +1,6 @@
+{
+  "source_directory": "./source",
+  "output_directory": "./output",
+  "index_file": "./data/index.sqlite3",
+  "theme_preset_default": "system"
+}

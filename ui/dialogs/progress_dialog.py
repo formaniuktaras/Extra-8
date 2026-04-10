@@ -20,6 +20,7 @@ class ProgressDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Прогрес індексації")
         self.setModal(False)
+        self.state = None
         self.status_label = QLabel("Очікування...")
         self.detail_label = QLabel("")
         self.progress = QProgressBar()
@@ -50,34 +51,45 @@ class ProgressDialog(QDialog):
         layout.addWidget(self.issues)
         layout.addLayout(btns)
 
-    def reset(self, _state) -> None:
-        self.status_label.setText("Індексація...")
-        self.progress.setValue(0)
-        self.progress.setMaximum(1)
-        self.stats.setText("0 / 0")
-        self.metrics.setText("Elapsed: 0s | Throughput: 0/s | ETA: -")
-        self.log.clear()
-        self.issues.clear()
-        self.detail_label.setText("")
+    def reset(self, state) -> None:
+        self.state = state
         self.btn_cancel.setEnabled(True)
         self.btn_copy.setEnabled(True)
         self.btn_save.setEnabled(True)
+        self.refresh_ui()
 
-    def append_log(self, text: str, level: str = "INFO") -> None:
-        self.log.append(f"[{level}] {text}")
+    def refresh_ui(self) -> None:
+        if self.state is None:
+            return
 
-    def append_error(self, text: str) -> None:
-        self.issues.append(text)
-
-    def update_state(self, state) -> None:
+        state = self.state
+        self.status_label.setText(state.status)
+        self.detail_label.setText(state.detail)
         self.progress.setMaximum(max(1, state.total))
-        self.progress.setValue(state.processed)
-        self.stats.setText(f"{state.processed} / {state.total}")
+        self.progress.setValue(state.current)
+        self.stats.setText(f"{state.current} / {state.total}")
+
         eta = state.eta_seconds()
         eta_text = f"{eta:.1f}s" if eta is not None else "-"
         self.metrics.setText(
             f"Elapsed: {state.elapsed():.1f}s | Throughput: {state.throughput():.2f}/s | ETA: {eta_text}"
         )
+
+        self.log.setPlainText("\n".join(state.log_lines))
+
+        issue_lines = []
+        if state.warnings:
+            issue_lines.append("Warnings:")
+            issue_lines.extend(state.warnings)
+        if state.errors:
+            if issue_lines:
+                issue_lines.append("")
+            issue_lines.append("Errors:")
+            issue_lines.extend(state.errors)
+        self.issues.setPlainText("\n".join(issue_lines))
+
+        if state.is_finished or state.is_cancelled:
+            self.btn_cancel.setEnabled(False)
 
     def copy_errors_to_clipboard(self) -> None:
         QGuiApplication.clipboard().setText(self.issues.toPlainText())
@@ -87,20 +99,3 @@ class ProgressDialog(QDialog):
         if not path:
             return
         Path(path).write_text(self.log.toPlainText() + "\n\n" + self.issues.toPlainText(), encoding="utf-8")
-
-    def mark_completed(self) -> None:
-        self.status_label.setText("Завершено")
-        self.detail_label.setText("Операція успішно завершена")
-        self.btn_cancel.setEnabled(False)
-
-    def mark_cancelled(self, processed: int, total: int) -> None:
-        self.status_label.setText("Скасовано")
-        self.detail_label.setText(f"Оброблено: {processed}; Залишилось: {max(0, total - processed)}")
-        self.btn_cancel.setEnabled(False)
-
-    def mark_completed_with_errors(self, errors: list[str]) -> None:
-        self.status_label.setText("Завершено з помилками")
-        self.detail_label.setText(f"Кількість помилок: {len(errors)}")
-        for err in errors:
-            self.append_error(err)
-        self.btn_cancel.setEnabled(False)

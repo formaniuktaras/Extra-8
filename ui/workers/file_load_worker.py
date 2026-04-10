@@ -14,9 +14,11 @@ class FileLoadWorker(BaseWorker):
     def run(self) -> None:
         self.started.emit()
         self.statusChanged.emit("Завантаження документа")
+        self.logMessage.emit(f"Читання файлу: {self.path}", "INFO")
         try:
             doc = read_docx(self.path)
             if self.is_cancel_requested():
+                self.logMessage.emit("Завантаження скасовано", "WARN")
                 self.cancelled.emit()
                 return
             self._emit_finished(render_plain_text(doc))

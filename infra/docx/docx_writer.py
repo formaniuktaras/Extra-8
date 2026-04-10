@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import io
 import zipfile
-from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from infra.docx.docx_reader import DocxDocument, NS, clone_body_elements
@@ -26,10 +25,3 @@ def build_extract_package(doc: DocxDocument, indices: list[int]) -> bytes:
             else:
                 zf.writestr(name, payload)
     return mem.getvalue()
-
-
-def write_extract_docx(doc: DocxDocument, indices: list[int], output: Path) -> bytes:
-    payload = build_extract_package(doc, indices)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_bytes(payload)
-    return payload

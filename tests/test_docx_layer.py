@@ -3,7 +3,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from infra.docx.docx_reader import NS, read_docx
-from infra.docx.docx_writer import write_extract_docx
+from infra.docx.docx_writer import build_extract_package
 from infra.docx.numbering import merge_prefix_if_needed, resolve_numbering_prefix
 from tests.conftest import create_docx
 
@@ -42,7 +42,7 @@ def test_write_docx_from_selected_block_indices(tmp_path: Path):
     p = create_docx(tmp_path / "a.docx")
     doc = read_docx(p)
     out = tmp_path / "out.docx"
-    write_extract_docx(doc, [0], out)
+    out.write_bytes(build_extract_package(doc, [0]))
     od = read_docx(out)
     assert len(od.paragraphs) >= 1
 
@@ -51,7 +51,7 @@ def test_preserving_namespace_declarations(tmp_path: Path):
     p = create_docx(tmp_path / "a.docx")
     doc = read_docx(p)
     out = tmp_path / "out.docx"
-    write_extract_docx(doc, [0], out)
+    out.write_bytes(build_extract_package(doc, [0]))
     with zipfile.ZipFile(out, "r") as zf:
         xml = zf.read("word/document.xml")
     root = ET.fromstring(xml)

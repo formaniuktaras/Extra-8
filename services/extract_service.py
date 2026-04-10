@@ -12,18 +12,21 @@ from infra.filesystem.file_ops import SafeFileOperator
 
 
 class ExtractSelectionStrategy(Protocol):
-    def select(self, matched_indices: set[int], paragraph_count: int) -> list[int]: ...
+    def select(self, paragraphs: list, matched_indices: set[int], paragraph_count: int) -> list[int]: ...
 
 
 @dataclass(slots=True)
-class ContextWindowSelectionStrategy:
+class DefaultContextStrategy:
     include_previous: int = 1
     include_next: int = 1
 
-    def select(self, matched_indices: set[int], paragraph_count: int) -> list[int]:
+    def select(self, paragraphs: list, matched_indices: set[int], paragraph_count: int) -> list[int]:
         selected: set[int] = set()
         for idx in matched_indices:
             selected.add(idx)
+            heading_idx = self._find_heading(paragraphs, idx)
+            if heading_idx is not None:
+                selected.add(heading_idx)
             for step in range(1, self.include_previous + 1):
                 if idx - step >= 0:
                     selected.add(idx - step)
@@ -31,6 +34,17 @@ class ContextWindowSelectionStrategy:
                 if idx + step < paragraph_count:
                     selected.add(idx + step)
         return sorted(selected)
+
+    @staticmethod
+    def _find_heading(paragraphs: list, idx: int) -> int | None:
+        for current in range(idx - 1, -1, -1):
+            text = (paragraphs[current].text or "").strip()
+            if not text:
+                continue
+            if text.isupper() or text.endswith(":"):
+                return current
+            break
+        return None
 
 
 class ExtractService:
@@ -42,7 +56,7 @@ class ExtractService:
     ) -> None:
         self.file_ops = file_ops
         self.rules = parse_rules(rules_json)
-        self.selection_strategy = selection_strategy or ContextWindowSelectionStrategy()
+        self.selection_strategy = selection_strategy or DefaultContextStrategy()
 
     def build_extracts_for_doc(self, doc, output_root: Path, source_rel: str) -> list[PersonExtract]:
         people_blocks: dict[str, set[int]] = {}
@@ -54,7 +68,7 @@ class ExtractService:
             safe_name = normalize_person_key(person_name).replace(" ", "_")
             rel = Path(source_rel).with_suffix("").as_posix().replace("/", "_") + f"__{safe_name}.docx"
             out_path = output_root / rel
-            selected_paragraph_positions = self.selection_strategy.select(paragraph_positions, len(doc.paragraphs))
+            selected_paragraph_positions = self.selection_strategy.select(doc.paragraphs, paragraph_positions, len(doc.paragraphs))
             selected_blocks = sorted({doc.paragraphs[i].block_index for i in selected_paragraph_positions})
             payload = build_extract_package(doc, selected_blocks)
             self.file_ops.atomic_write_bytes(out_path, payload)

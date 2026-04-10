@@ -7,6 +7,7 @@ from typing import Callable
 
 from domain.models import SourceDocument
 from infra.docx.docx_reader import read_docx
+from infra.filesystem.file_ops import SafeFileOperator
 from infra.filesystem.source_scanner import scan_docx_files
 from infra.storage.sqlite_store import SQLiteStore
 from services.extract_service import ExtractService
@@ -40,11 +41,19 @@ def file_sha1(path: Path) -> str:
 
 
 class IndexingService:
-    def __init__(self, store: SQLiteStore, extract_service: ExtractService, source_root: Path, output_root: Path) -> None:
+    def __init__(
+        self,
+        store: SQLiteStore,
+        extract_service: ExtractService,
+        source_root: Path,
+        output_root: Path,
+        file_ops: SafeFileOperator,
+    ) -> None:
         self.store = store
         self.extract_service = extract_service
         self.source_root = source_root
         self.output_root = output_root
+        self.file_ops = file_ops
 
     def detect_changes(self) -> DiffResult:
         files = scan_docx_files(self.source_root)
@@ -80,6 +89,8 @@ class IndexingService:
         for key in diff.removed_source_keys:
             if token:
                 token.throw_if_cancelled()
+            stale_paths = [self.output_root / rel for rel in self.store.list_generated_rels_for_source_key(key)]
+            self.file_ops.cleanup_stale_generated_outputs(self.output_root, stale_paths)
             self.store.delete_document_by_source_key(key)
         files = diff.new_files + diff.changed_files
         total = len(files)

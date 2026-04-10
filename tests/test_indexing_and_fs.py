@@ -1,10 +1,12 @@
 from pathlib import Path
 
+import pytest
+
 from core.settings import UserSettings
 from infra.filesystem.file_ops import SafeFileOperator
 from infra.filesystem.temp_manager import TempManager
 from infra.storage.sqlite_store import SQLiteStore
-from services.extract_service import ExtractService
+from services.extract_service import DefaultContextStrategy, ExtractService
 from services.indexing_service import CancellationToken, IndexingService
 from tests.conftest import create_docx
 
@@ -16,8 +18,9 @@ def test_changed_new_removed_document_detection(tmp_path: Path):
     output.mkdir()
     f1 = create_docx(source / "a.docx")
     store = SQLiteStore(tmp_path / "i.sqlite3")
-    ext = ExtractService(SafeFileOperator(TempManager()), UserSettings().summary_rules_json)
-    svc = IndexingService(store, ext, source, output)
+    file_ops = SafeFileOperator(TempManager())
+    ext = ExtractService(file_ops, UserSettings().summary_rules_json)
+    svc = IndexingService(store, ext, source, output, file_ops)
     d1 = svc.detect_changes()
     assert len(d1.new_files) == 1
     svc.full_rebuild()
@@ -31,13 +34,28 @@ def test_changed_new_removed_document_detection(tmp_path: Path):
     assert d4.removed_source_keys
 
 
-def test_file_replacement_rollback_behavior(tmp_path: Path):
+def test_file_replacement_rollback_behavior(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     tm = TempManager()
     ops = SafeFileOperator(tm)
     target = tmp_path / "x.bin"
     target.write_bytes(b"old")
-    ops.atomic_write_bytes(target, b"new")
-    assert target.read_bytes() == b"new"
+    tmp = ops._local_temp_path(target)
+    tmp.write_bytes(b"new")
+
+    original_replace = Path.replace
+
+    def failing_replace(self: Path, other: Path):
+        if self == tmp:
+            raise RuntimeError("boom")
+        return original_replace(self, other)
+
+    monkeypatch.setattr(Path, "replace", failing_replace)
+    with pytest.raises(RuntimeError):
+        ops.safe_replace_file(tmp, target)
+
+    assert target.read_bytes() == b"old"
+    assert not tmp.exists()
+    assert not target.with_suffix(target.suffix + ".bak").exists()
 
 
 def test_cleanup_empty_nested_dirs(tmp_path: Path):
@@ -58,11 +76,20 @@ def test_cancellation_during_indexing(tmp_path: Path):
     output.mkdir()
     create_docx(source / "a.docx")
     store = SQLiteStore(tmp_path / "i.sqlite3")
-    ext = ExtractService(SafeFileOperator(TempManager()), UserSettings().summary_rules_json)
-    svc = IndexingService(store, ext, source, output)
+    file_ops = SafeFileOperator(TempManager())
+    ext = ExtractService(file_ops, UserSettings().summary_rules_json)
+    svc = IndexingService(store, ext, source, output, file_ops)
     token = CancellationToken(is_cancelled=True)
-    try:
+    with pytest.raises(RuntimeError):
         svc.full_rebuild(token=token)
-        assert False, "expected cancellation"
-    except RuntimeError:
-        assert True
+
+
+def test_default_context_strategy_includes_heading() -> None:
+    class P:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    paragraphs = [P("РОЗДІЛ 1"), P("ПЕТРЕНКО Іван Іванович"), P("службовий текст")]
+    strategy = DefaultContextStrategy(include_previous=0, include_next=0)
+    selected = strategy.select(paragraphs, {1}, len(paragraphs))
+    assert 0 in selected and 1 in selected

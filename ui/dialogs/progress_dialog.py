@@ -21,6 +21,7 @@ class ProgressDialog(QDialog):
         self.setWindowTitle("Прогрес індексації")
         self.setModal(False)
         self.status_label = QLabel("Очікування...")
+        self.detail_label = QLabel("")
         self.progress = QProgressBar()
         self.stats = QLabel("0 / 0")
         self.metrics = QLabel("Elapsed: 0s | Throughput: 0/s | ETA: -")
@@ -41,6 +42,7 @@ class ProgressDialog(QDialog):
 
         layout = QVBoxLayout(self)
         layout.addWidget(self.status_label)
+        layout.addWidget(self.detail_label)
         layout.addWidget(self.progress)
         layout.addWidget(self.stats)
         layout.addWidget(self.metrics)
@@ -56,9 +58,13 @@ class ProgressDialog(QDialog):
         self.metrics.setText("Elapsed: 0s | Throughput: 0/s | ETA: -")
         self.log.clear()
         self.issues.clear()
+        self.detail_label.setText("")
+        self.btn_cancel.setEnabled(True)
+        self.btn_copy.setEnabled(True)
+        self.btn_save.setEnabled(True)
 
-    def append_log(self, text: str) -> None:
-        self.log.append(text)
+    def append_log(self, text: str, level: str = "INFO") -> None:
+        self.log.append(f"[{level}] {text}")
 
     def append_error(self, text: str) -> None:
         self.issues.append(text)
@@ -84,3 +90,17 @@ class ProgressDialog(QDialog):
 
     def mark_completed(self) -> None:
         self.status_label.setText("Завершено")
+        self.detail_label.setText("Операція успішно завершена")
+        self.btn_cancel.setEnabled(False)
+
+    def mark_cancelled(self, processed: int, total: int) -> None:
+        self.status_label.setText("Скасовано")
+        self.detail_label.setText(f"Оброблено: {processed}; Залишилось: {max(0, total - processed)}")
+        self.btn_cancel.setEnabled(False)
+
+    def mark_completed_with_errors(self, errors: list[str]) -> None:
+        self.status_label.setText("Завершено з помилками")
+        self.detail_label.setText(f"Кількість помилок: {len(errors)}")
+        for err in errors:
+            self.append_error(err)
+        self.btn_cancel.setEnabled(False)

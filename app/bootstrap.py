@@ -12,17 +12,17 @@ from services.diagnostics_service import DiagnosticsService
 from services.extract_service import ExtractService
 from services.indexing_service import IndexingService
 from services.search_service import SearchService
+from services.app_config_service import AppConfigService
 from services.settings_service import SettingsService
 
 
 def bootstrap():
     cfg_mgr = ConfigManager()
     cfg, cfg_path = cfg_mgr.load_or_create()
+    app_config_service = AppConfigService(cfg_mgr, cfg, cfg_path)
 
+    source_root, output_root, db_path = app_config_service.resolve_paths()
     root = cfg_path.parent
-    source_root = (root / cfg.source_directory).resolve()
-    output_root = (root / cfg.output_directory).resolve()
-    db_path = (root / cfg.index_file).resolve()
 
     source_root.mkdir(parents=True, exist_ok=True)
     output_root.mkdir(parents=True, exist_ok=True)
@@ -46,4 +46,5 @@ def bootstrap():
         "search_service": search_service,
         "diagnostics_service": diagnostics_service,
         "settings_service": settings_service,
+        "app_config_service": app_config_service,
     }

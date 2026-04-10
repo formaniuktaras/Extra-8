@@ -69,10 +69,12 @@ def test_settings_apply_live_preview(qapp):
     from ui.dialogs.settings_dialog import SettingsDialog
     from ui.theme_manager import ThemeManager
 
+    from core.config import AppConfig
+
     settings = UserSettings()
-    dlg = SettingsDialog(settings)
+    dlg = SettingsDialog(settings, AppConfig())
     dlg.theme_combo.setCurrentText("dark")
-    dlg.font_edit.setText("Arial")
+    dlg.ui_font_edit.setText("Arial")
     updated = dlg.build_settings(settings)
     ThemeManager(qapp).apply(updated)
     assert qapp.font().family() == "Arial"

@@ -50,18 +50,20 @@ class SearchTab(QWidget):
         top.addWidget(self.open_folder_btn)
         top.addWidget(self.theme_combo)
 
-        right = QSplitter(Qt.Vertical)
-        right.addWidget(self.extracts_list)
-        right.addWidget(self.extract_preview)
-        right.addWidget(self.summary_preview)
+        self.right_splitter = QSplitter(Qt.Vertical)
+        self.right_splitter.setObjectName("search_right_splitter")
+        self.right_splitter.addWidget(self.extracts_list)
+        self.right_splitter.addWidget(self.extract_preview)
+        self.right_splitter.addWidget(self.summary_preview)
 
-        center = QSplitter(Qt.Horizontal)
-        center.addWidget(self.people_list)
-        center.addWidget(right)
+        self.center_splitter = QSplitter(Qt.Horizontal)
+        self.center_splitter.setObjectName("search_center_splitter")
+        self.center_splitter.addWidget(self.people_list)
+        self.center_splitter.addWidget(self.right_splitter)
 
         layout = QVBoxLayout(self)
         layout.addLayout(top)
-        layout.addWidget(center)
+        layout.addWidget(self.center_splitter)
 
         self.search_edit.textChanged.connect(self.queryChanged)
         self.rebuild_btn.clicked.connect(self.rebuildRequested)

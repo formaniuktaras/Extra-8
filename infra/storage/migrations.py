@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def init_schema(conn: sqlite3.Connection) -> None:
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA foreign_keys=ON;")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS meta (
@@ -45,15 +43,12 @@ def init_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_extracts_person_norm ON extracts(person_name_norm);")
     conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)", (str(SCHEMA_VERSION),))
-    conn.commit()
 
 
 def migrate_if_needed(conn: sqlite3.Connection) -> None:
+    init_schema(conn)
     cur = conn.execute("SELECT value FROM meta WHERE key='schema_version'")
     row = cur.fetchone()
-    if not row:
-        init_schema(conn)
-        return
-    version = int(row[0])
-    if version < SCHEMA_VERSION:
-        init_schema(conn)
+    if not row or int(row[0]) < SCHEMA_VERSION:
+        conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)", (str(SCHEMA_VERSION),))
+    conn.commit()

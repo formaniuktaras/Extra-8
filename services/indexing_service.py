@@ -19,6 +19,18 @@ class DiffResult:
     removed_source_keys: list[str]
 
 
+@dataclass(slots=True)
+class CancellationToken:
+    is_cancelled: bool = False
+
+    def cancel(self) -> None:
+        self.is_cancelled = True
+
+    def throw_if_cancelled(self) -> None:
+        if self.is_cancelled:
+            raise RuntimeError("Operation cancelled")
+
+
 def file_sha1(path: Path) -> str:
     h = hashlib.sha1()
     with path.open("rb") as f:
@@ -54,16 +66,26 @@ class IndexingService:
         removed = [k for k in db_docs.keys() if k not in seen_keys]
         return DiffResult(new_files, changed_files, removed)
 
-    def quick_check(self) -> DiffResult:
+    def quick_check(self, token: CancellationToken | None = None) -> DiffResult:
+        if token:
+            token.throw_if_cancelled()
         return self.detect_changes()
 
-    def full_rebuild(self, on_progress: Callable[[str, int, int], None] | None = None) -> None:
+    def full_rebuild(
+        self,
+        on_progress: Callable[[str, int, int], None] | None = None,
+        token: CancellationToken | None = None,
+    ) -> None:
         diff = self.detect_changes()
         for key in diff.removed_source_keys:
+            if token:
+                token.throw_if_cancelled()
             self.store.delete_document_by_source_key(key)
         files = diff.new_files + diff.changed_files
         total = len(files)
         for i, path in enumerate(files, 1):
+            if token:
+                token.throw_if_cancelled()
             rel = path.relative_to(self.source_root).as_posix()
             doc_model = SourceDocument(
                 source_key=rel.lower(),
@@ -76,6 +98,8 @@ class IndexingService:
             doc_id = self.store.upsert_document(doc_model)
             parsed = read_docx(path)
             extracts = self.extract_service.build_extracts_for_doc(parsed, self.output_root, rel)
+            if token:
+                token.throw_if_cancelled()
             self.store.replace_extracts_for_document(doc_id, extracts)
             if on_progress:
                 on_progress("indexing", i, total)

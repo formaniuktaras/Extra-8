@@ -1,45 +1,59 @@
 from __future__ import annotations
 
 import shutil
-from dataclasses import dataclass
+import uuid
 from pathlib import Path
 
 from infra.filesystem.temp_manager import TempManager
-
-
-@dataclass(slots=True)
-class ReplaceTransaction:
-    created: list[Path]
-    backups: list[tuple[Path, Path]]
 
 
 class SafeFileOperator:
     def __init__(self, temp_manager: TempManager) -> None:
         self.temp_manager = temp_manager
 
-    def atomic_replace_bytes(self, target: Path, payload: bytes) -> None:
-        tx = ReplaceTransaction(created=[], backups=[])
+    def _local_temp_path(self, target: Path) -> Path:
         target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.temp_manager.alloc(suffix=target.suffix)
-        tmp.write_bytes(payload)
-        tx.created.append(tmp)
-        bak = target.with_suffix(target.suffix + ".bak")
+        return target.parent / f".{target.name}.{uuid.uuid4().hex}.tmp"
+
+    def safe_replace_file(self, temp_path: Path, target: Path) -> None:
+        backup = target.with_suffix(target.suffix + ".bak")
         try:
             if target.exists():
-                if bak.exists():
-                    bak.unlink()
-                target.replace(bak)
-                tx.backups.append((target, bak))
-            tmp.replace(target)
-            for _, b in tx.backups:
-                b.unlink(missing_ok=True)
+                if backup.exists():
+                    backup.unlink()
+                target.replace(backup)
+            temp_path.replace(target)
+            backup.unlink(missing_ok=True)
         except Exception:
-            if target.exists() and bak.exists():
-                target.unlink(missing_ok=True)
-                bak.replace(target)
+            if backup.exists() and not target.exists():
+                backup.replace(target)
             raise
         finally:
-            tmp.unlink(missing_ok=True)
+            temp_path.unlink(missing_ok=True)
+
+    def atomic_write_bytes(self, target: Path, payload: bytes) -> None:
+        temp_path = self._local_temp_path(target)
+        temp_path.write_bytes(payload)
+        self.safe_replace_file(temp_path, target)
+
+
+    def atomic_replace_bytes(self, target: Path, payload: bytes) -> None:
+        self.atomic_write_bytes(target, payload)
+
+    def remove_file_and_prune_empty_dirs(self, path: Path, stop: Path) -> None:
+        if path.exists():
+            path.unlink()
+        cur = path.parent
+        while cur != stop and cur.exists() and not any(cur.iterdir()):
+            cur.rmdir()
+            cur = cur.parent
+
+    def cleanup_stale_generated_outputs(self, root: Path, stale_paths: list[Path]) -> None:
+        for stale in stale_paths:
+            try:
+                self.remove_file_and_prune_empty_dirs(stale, root)
+            except FileNotFoundError:
+                continue
 
     def cleanup_empty_parents(self, path: Path, stop: Path) -> None:
         cur = path.parent

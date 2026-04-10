@@ -22,12 +22,17 @@ class SearchTab(QWidget):
     queryChanged = Signal(str)
     rebuildRequested = Signal()
     quickCheckRequested = Signal()
+    openSourceRequested = Signal()
+    openFolderRequested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
         self.search_edit = QLineEdit()
+        self.results_label = QLabel("0 результатів")
         self.rebuild_btn = QPushButton("Перебудувати індекс")
         self.quick_btn = QPushButton("Швидка перевірка")
+        self.open_source_btn = QPushButton("Відкрити DOCX")
+        self.open_folder_btn = QPushButton("Відкрити теку")
         self.theme_combo = QComboBox()
         self.theme_combo.addItems(["system", "light", "dark"])
         self.people_list = PeopleListView()
@@ -38,8 +43,11 @@ class SearchTab(QWidget):
         top = QHBoxLayout()
         top.addWidget(QLabel("Пошук П.І.Б."))
         top.addWidget(self.search_edit)
+        top.addWidget(self.results_label)
         top.addWidget(self.rebuild_btn)
         top.addWidget(self.quick_btn)
+        top.addWidget(self.open_source_btn)
+        top.addWidget(self.open_folder_btn)
         top.addWidget(self.theme_combo)
 
         right = QSplitter(Qt.Vertical)
@@ -58,3 +66,8 @@ class SearchTab(QWidget):
         self.search_edit.textChanged.connect(self.queryChanged)
         self.rebuild_btn.clicked.connect(self.rebuildRequested)
         self.quick_btn.clicked.connect(self.quickCheckRequested)
+        self.open_source_btn.clicked.connect(self.openSourceRequested)
+        self.open_folder_btn.clicked.connect(self.openFolderRequested)
+
+    def set_people_count(self, count: int) -> None:
+        self.results_label.setText(f"{count} результатів")

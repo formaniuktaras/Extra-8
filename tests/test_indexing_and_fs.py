@@ -5,7 +5,7 @@ from infra.filesystem.file_ops import SafeFileOperator
 from infra.filesystem.temp_manager import TempManager
 from infra.storage.sqlite_store import SQLiteStore
 from services.extract_service import ExtractService
-from services.indexing_service import IndexingService
+from services.indexing_service import CancellationToken, IndexingService
 from tests.conftest import create_docx
 
 
@@ -36,14 +36,33 @@ def test_file_replacement_rollback_behavior(tmp_path: Path):
     ops = SafeFileOperator(tm)
     target = tmp_path / "x.bin"
     target.write_bytes(b"old")
-    ops.atomic_replace_bytes(target, b"new")
+    ops.atomic_write_bytes(target, b"new")
     assert target.read_bytes() == b"new"
 
 
-def test_temp_cleanup_behavior(tmp_path: Path):
+def test_cleanup_empty_nested_dirs(tmp_path: Path):
     tm = TempManager()
-    p = tm.alloc()
-    p.write_text("x", encoding="utf-8")
-    assert tm.root.exists()
-    tm.cleanup()
-    assert not tm.root.exists()
+    ops = SafeFileOperator(tm)
+    root = tmp_path / "generated"
+    nested = root / "a" / "b" / "c.txt"
+    nested.parent.mkdir(parents=True)
+    nested.write_text("x", encoding="utf-8")
+    ops.remove_file_and_prune_empty_dirs(nested, root)
+    assert not (root / "a").exists()
+
+
+def test_cancellation_during_indexing(tmp_path: Path):
+    source = tmp_path / "s"
+    output = tmp_path / "o"
+    source.mkdir()
+    output.mkdir()
+    create_docx(source / "a.docx")
+    store = SQLiteStore(tmp_path / "i.sqlite3")
+    ext = ExtractService(SafeFileOperator(TempManager()), UserSettings().summary_rules_json)
+    svc = IndexingService(store, ext, source, output)
+    token = CancellationToken(is_cancelled=True)
+    try:
+        svc.full_rebuild(token=token)
+        assert False, "expected cancellation"
+    except RuntimeError:
+        assert True

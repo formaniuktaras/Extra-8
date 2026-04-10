@@ -1,33 +1,37 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, Signal
+from services.indexing_service import CancellationToken
+from ui.workers.base_worker import BaseWorker
 
 
-class IndexingWorker(QObject):
-    progressChanged = Signal(str, int, int)
-    statusChanged = Signal(str)
-    logMessage = Signal(str)
-    finished = Signal()
-    errorOccurred = Signal(str)
-
+class IndexingWorker(BaseWorker):
     def __init__(self, service) -> None:
         super().__init__()
         self.service = service
-        self._cancelled = False
+        self._token = CancellationToken()
 
-    def cancel(self) -> None:
-        self._cancelled = True
+    def request_cancel(self) -> None:
+        super().request_cancel()
+        self._token.cancel()
 
     def run_full(self) -> None:
+        self.started.emit()
+        self.statusChanged.emit("Індексація...")
         try:
-            self.statusChanged.emit("Індексація...")
+            def on_progress(_phase: str, processed: int, total: int) -> None:
+                if self.is_cancel_requested():
+                    self._token.cancel()
+                self.progressChanged.emit(processed, total)
 
-            def on_progress(phase: str, processed: int, total: int) -> None:
-                if self._cancelled:
-                    raise RuntimeError("Скасовано")
-                self.progressChanged.emit(phase, processed, total)
-
-            self.service.full_rebuild(on_progress)
-            self.finished.emit()
+            self.service.full_rebuild(on_progress=on_progress, token=self._token)
+            if self.is_cancel_requested():
+                self.cancelled.emit()
+                return
+            self._emit_finished({"status": "ok"})
+        except RuntimeError as exc:
+            if "cancelled" in str(exc).lower() or "скасовано" in str(exc).lower():
+                self.cancelled.emit()
+            else:
+                self._emit_error(exc)
         except Exception as exc:
-            self.errorOccurred.emit(str(exc))
+            self._emit_error(exc)

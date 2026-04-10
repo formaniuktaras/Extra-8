@@ -8,7 +8,7 @@ from xml.etree import ElementTree as ET
 from infra.docx.docx_reader import DocxDocument, NS, clone_body_elements
 
 
-def write_extract_docx(doc: DocxDocument, indices: list[int], output: Path) -> bytes:
+def build_extract_package(doc: DocxDocument, indices: list[int]) -> bytes:
     root = ET.fromstring(doc.zip_entries["word/document.xml"])
     body = root.find("w:body", NS)
     if body is None:
@@ -25,7 +25,11 @@ def write_extract_docx(doc: DocxDocument, indices: list[int], output: Path) -> b
                 zf.writestr(name, updated_xml)
             else:
                 zf.writestr(name, payload)
-    data = mem.getvalue()
+    return mem.getvalue()
+
+
+def write_extract_docx(doc: DocxDocument, indices: list[int], output: Path) -> bytes:
+    payload = build_extract_package(doc, indices)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_bytes(data)
-    return data
+    output.write_bytes(payload)
+    return payload

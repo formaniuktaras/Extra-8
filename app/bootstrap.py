@@ -29,7 +29,7 @@ def bootstrap():
 
     setup_logging(root / "logs" / "app.log")
 
-    settings_mgr = SettingsManager(root / "user")
+    settings_mgr = SettingsManager()
     settings_service = SettingsService(settings_mgr)
 
     store = SQLiteStore(db_path)

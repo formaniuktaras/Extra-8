@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, asdict, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
+
+try:
+    from PySide6.QtCore import QStandardPaths
+except Exception:  # pragma: no cover
+    QStandardPaths = None
 
 
 def _default_rules_json() -> str:
@@ -25,7 +30,7 @@ def _default_rules_json() -> str:
 class UserSettings:
     theme_preset: str = "system"
     colors: dict[str, str] = field(default_factory=lambda: {"accent": "#3a7afe"})
-    fonts: dict[str, str] = field(default_factory=lambda: {"family": "Segoe UI", "size": "10"})
+    fonts: dict[str, str] = field(default_factory=lambda: {"family": "Segoe UI", "size": "10", "mono": "Consolas"})
     scaling: float = 1.0
     highlight_options: dict[str, bool] = field(default_factory=lambda: {"extract": True})
     summary_unit: str = "в/ч"
@@ -35,7 +40,15 @@ class UserSettings:
 
 
 class SettingsManager:
-    def __init__(self, base_dir: Path) -> None:
+    def __init__(self, base_dir: Path | None = None) -> None:
+        if base_dir is None:
+            if QStandardPaths is not None:
+                loc = QStandardPaths.writableLocation(QStandardPaths.AppConfigLocation)
+            else:
+                loc = ""
+            if not loc:
+                loc = str(Path.home() / ".extra-8")
+            base_dir = Path(loc)
         self.base_dir = base_dir
         self.path = base_dir / "user_settings.json"
 

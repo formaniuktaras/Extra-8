@@ -122,6 +122,19 @@ class SQLiteStore:
         with self.connection_factory.transaction() as conn:
             conn.execute("DELETE FROM documents WHERE source_key=?", (source_key,))
 
+    def list_generated_rels_for_source_key(self, source_key: str) -> list[str]:
+        with self.connection_factory.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT e.generated_rel
+                FROM extracts e
+                JOIN documents d ON d.id = e.document_id
+                WHERE d.source_key=?
+                """,
+                (source_key,),
+            ).fetchall()
+        return [str(r["generated_rel"]) for r in rows]
+
     def search_people(self, filter_keys: set[str], limit: int = 200) -> list[sqlite3.Row]:
         with self.connection_factory.connection() as conn:
             if not filter_keys:

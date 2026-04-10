@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QPushButton, QSplitter, QToolBar, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QListWidget, QPushButton, QSplitter, QToolBar, QVBoxLayout, QWidget
 
 from ui.widgets.preview_panel import PreviewPanel
 from ui.widgets.source_tree_panel import SourceTreePanel
@@ -16,6 +16,7 @@ class DataTab(QWidget):
     renameRequested = Signal()
     deleteRequested = Signal()
     openFolderRequested = Signal()
+    extractSelectionChanged = Signal(int)
 
     def __init__(self) -> None:
         super().__init__()
@@ -43,8 +44,11 @@ class DataTab(QWidget):
         self.tree = SourceTreePanel()
         self.full_preview = PreviewPanel("Документ цілком")
         self.extract_preview = PreviewPanel("Вміст витягу")
+        self.extracts_list = QListWidget()
+        self._extract_items: list[dict] = []
 
         right = QSplitter(Qt.Vertical)
+        right.addWidget(self.extracts_list)
         right.addWidget(self.full_preview)
         right.addWidget(self.extract_preview)
 
@@ -64,3 +68,17 @@ class DataTab(QWidget):
         self.btn_new_folder.clicked.connect(self.newFolderRequested)
         self.btn_rename.clicked.connect(self.renameRequested)
         self.btn_delete.clicked.connect(self.deleteRequested)
+        self.extracts_list.currentRowChanged.connect(self.extractSelectionChanged)
+
+    def set_extract_items(self, extracts: list[dict]) -> None:
+        self._extract_items = extracts
+        self.extracts_list.clear()
+        for item in extracts:
+            self.extracts_list.addItem(item.get("generated_rel", "extract"))
+        if extracts:
+            self.extracts_list.setCurrentRow(0)
+
+    def current_extract(self, index: int) -> dict | None:
+        if 0 <= index < len(self._extract_items):
+            return self._extract_items[index]
+        return None

@@ -35,10 +35,17 @@ class PersonExtract:
 @dataclass(slots=True)
 class DiagnosticsReport:
     source_rel: str
+    source_abs: str
+    file_size: int
+    mtime: float
+    has_styles_xml: bool
+    has_numbering_xml: bool
     total_paragraphs: int
     body_paragraphs: int
     unique_names: list[str]
     blocks_count: int
+    paragraph_indices: list[int]
+    matched_indices: list[int]
     matched_examples: list[str]
     uppercase_hints: list[str]
     error_text: str | None = None

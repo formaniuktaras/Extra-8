@@ -17,11 +17,14 @@ class QuickCheckWorker(BaseWorker):
     def run(self) -> None:
         self.started.emit()
         self.statusChanged.emit("Швидка перевірка...")
+        self.logMessage.emit("Запуск quick check", "INFO")
         try:
             diff = self.service.quick_check(token=self._token)
             if self.is_cancel_requested():
+                self.logMessage.emit("Quick check скасовано", "WARN")
                 self.cancelled.emit()
                 return
+            self.detailChanged.emit(f"Нові: {len(diff.new_files)}, змінені: {len(diff.changed_files)}")
             self._emit_finished(
                 {
                     "new": len(diff.new_files),

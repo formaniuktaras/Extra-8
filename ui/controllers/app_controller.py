@@ -6,6 +6,7 @@ import time
 import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from PySide6.QtCore import QObject, QThread, QUrl
 from PySide6.QtGui import QDesktopServices
@@ -50,7 +51,8 @@ class AppController(QObject):
         self._index_worker: IndexingWorker | None = None
         self._quick_worker: QuickCheckWorker | None = None
         self._load_worker: FileLoadWorker | None = None
-        self._thread: QThread | None = None
+        self._current_preview_source: Path | None = None
+        self._active_threads: dict[int, QThread] = {}
         self._wire_signals()
 
     def _wire_signals(self) -> None:
@@ -75,6 +77,7 @@ class AppController(QObject):
         d.renameRequested.connect(self.rename_selected)
         d.deleteRequested.connect(self.delete_selected)
         d.openFolderRequested.connect(self.open_selected_containing_folder)
+        d.extractSelectionChanged.connect(self._data_extract_selected)
 
         self.win.progress_dialog.btn_cancel.clicked.connect(self.cancel_current_worker)
         self.win.progress_dialog.btn_copy.clicked.connect(self.win.progress_dialog.copy_errors_to_clipboard)
@@ -106,8 +109,21 @@ class AppController(QObject):
         if not item:
             return
         extract_path = Path(self.win.indexing_service.output_root) / item["generated_rel"]
+        preview_text = ""
         if extract_path.exists():
-            self.win.search_tab.extract_preview.setPlainText(str(extract_path))
+            try:
+                preview_text = "\n".join(p.text for p in read_docx(extract_path).paragraphs if p.text)
+            except Exception:
+                preview_text = ""
+        if not preview_text:
+            source_abs = item.get("source_abs")
+            if source_abs and Path(source_abs).exists():
+                src_doc = read_docx(Path(source_abs))
+                blocks = set(json.loads(item.get("paragraphs_json", "[]")))
+                preview_text = "\n".join(p.text for p in src_doc.paragraphs if p.block_index in blocks)
+            if not preview_text:
+                preview_text = "\n".join(item.get("paragraphs_text", []))
+        self.win.search_tab.extract_preview.setPlainText(preview_text)
         self.win.search_tab.summary_preview.setPlainText(item.get("summary_text") or "")
 
     def open_generated_extract(self, index) -> None:
@@ -179,7 +195,18 @@ class AppController(QObject):
         if path.is_dir():
             shutil.rmtree(path)
         elif path.exists():
-            path.unlink()
+            if path.suffix.lower() == ".docx":
+                source_key = path.relative_to(self.win.source_root).as_posix().lower()
+                stale_paths = [
+                    Path(self.win.indexing_service.output_root) / rel
+                    for rel in self.win.indexing_service.store.list_generated_rels_for_source_key(source_key)
+                ]
+                self.win.indexing_service.file_ops.cleanup_stale_generated_outputs(
+                    self.win.indexing_service.output_root,
+                    stale_paths,
+                )
+                self.win.indexing_service.store.delete_document_by_source_key(source_key)
+            self.win.indexing_service.file_ops.remove_file_and_prune_empty_dirs(path, self.win.source_root)
         self.refresh_tree()
 
     def open_selected_containing_folder(self) -> None:
@@ -195,19 +222,30 @@ class AppController(QObject):
     def show_diagnostics(self) -> None:
         self.win.show_diagnostics()
 
-    def _start_worker(self, worker, slot_name: str) -> None:
-        self._thread = QThread(self.win)
-        worker.moveToThread(self._thread)
-        self._thread.started.connect(getattr(worker, slot_name))
-        worker.finished.connect(self._thread.quit)
-        worker.cancelled.connect(self._thread.quit)
+    def _start_worker(self, worker, slot_name: str, on_done: Callable[[], None] | None = None) -> None:
+        thread = QThread(self.win)
+        worker.moveToThread(thread)
+        worker_id = id(worker)
+        self._active_threads[worker_id] = thread
+        thread.started.connect(getattr(worker, slot_name))
+        worker.finished.connect(thread.quit)
+        worker.cancelled.connect(thread.quit)
+        worker.errorOccurred.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         worker.cancelled.connect(worker.deleteLater)
-        self._thread.finished.connect(self._thread.deleteLater)
+        worker.errorOccurred.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda: self._active_threads.pop(worker_id, None))
+        if on_done is not None:
+            worker.finished.connect(lambda _result: on_done())
+            worker.cancelled.connect(on_done)
+            worker.errorOccurred.connect(lambda _m, _t: on_done())
         worker.errorOccurred.connect(self._on_worker_error)
-        worker.logMessage.connect(lambda m, _lvl: self.win.progress_dialog.append_log(m))
+        worker.statusChanged.connect(self.win.progress_dialog.status_label.setText)
+        worker.detailChanged.connect(self.win.progress_dialog.detail_label.setText)
+        worker.logMessage.connect(lambda m, lvl: self.win.progress_dialog.append_log(m, lvl))
         worker.progressChanged.connect(self._on_worker_progress)
-        self._thread.start()
+        thread.start()
 
     def rebuild_index(self) -> None:
         self.progress_state = ProgressState()
@@ -215,8 +253,11 @@ class AppController(QObject):
         self.win.progress_dialog.show()
         self._index_worker = IndexingWorker(self.win.indexing_service)
         self._index_worker.finished.connect(lambda _r: self.win.statusBar().showMessage("Індексацію завершено"))
-        self._index_worker.finished.connect(lambda _r: self.win.progress_dialog.mark_completed())
+        self._index_worker.finished.connect(self._complete_progress_dialog)
         self._index_worker.cancelled.connect(lambda: self.win.statusBar().showMessage("Індексацію скасовано"))
+        self._index_worker.cancelled.connect(
+            lambda: self.win.progress_dialog.mark_cancelled(self.progress_state.processed, self.progress_state.total)
+        )
         self._start_worker(self._index_worker, "run_full")
 
     def quick_check(self) -> None:
@@ -248,6 +289,7 @@ class AppController(QObject):
         if not p.is_file() or p.suffix.lower() != ".docx":
             return
         self._load_worker = FileLoadWorker(p)
+        self._current_preview_source = p
         self._load_worker.finished.connect(lambda txt: self.win.data_tab.full_preview.setPlainText(txt))
         self._load_worker.finished.connect(lambda _txt: self._load_extract_preview_for_path(p))
         self._start_worker(self._load_worker, "run")
@@ -258,9 +300,32 @@ class AppController(QObject):
         if not docs:
             self.win.data_tab.extract_preview.setPlainText("")
             return
-        first = docs[0]
-        indices = json.loads(first.get("paragraphs_json", "[]"))
-        src_doc = read_docx(source_path)
-        selected = [p.text for p in src_doc.paragraphs if p.block_index in set(indices)]
-        self.win.data_tab.extract_preview.setPlainText("\n".join(selected))
+        self.win.data_tab.set_extract_items(docs)
+        self._render_data_extract_by_index(0, source_path)
 
+    def _data_extract_selected(self, idx: int) -> None:
+        if self._current_preview_source is None:
+            return
+        self._render_data_extract_by_index(idx, self._current_preview_source)
+
+    def _render_data_extract_by_index(self, idx: int, source_path: Path) -> None:
+        extract = self.win.data_tab.current_extract(idx)
+        if not extract:
+            self.win.data_tab.extract_preview.setPlainText("")
+            return
+        indices = set(json.loads(extract.get("paragraphs_json", "[]")))
+        src_doc = read_docx(source_path)
+        selected = [p.text for p in src_doc.paragraphs if p.block_index in indices]
+        text = "\n".join(selected).strip() or "\n".join(extract.get("paragraphs_text", []))
+        self.win.data_tab.extract_preview.setPlainText(text)
+        highlighted = []
+        for p in src_doc.paragraphs:
+            prefix = ">> " if p.block_index in indices else "   "
+            highlighted.append(f"{prefix}{p.text}")
+        self.win.data_tab.full_preview.setPlainText("\n".join(highlighted))
+
+    def _complete_progress_dialog(self) -> None:
+        if self.progress_state.errors:
+            self.win.progress_dialog.mark_completed_with_errors(self.progress_state.errors)
+        else:
+            self.win.progress_dialog.mark_completed()

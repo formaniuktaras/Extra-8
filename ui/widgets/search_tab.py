@@ -70,4 +70,4 @@ class SearchTab(QWidget):
         self.open_folder_btn.clicked.connect(self.openFolderRequested)
 
     def set_people_count(self, count: int) -> None:
-        self.results_label.setText(f"{count} результатів")
+        self.results_label.setText("Нічого не знайдено" if count == 0 else f"{count} результатів")

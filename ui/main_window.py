@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QAction
-from PySide6.QtWidgets import QMainWindow, QStatusBar, QTabWidget
+from PySide6.QtWidgets import QApplication, QMainWindow, QStatusBar, QTabWidget
 
 from services.diagnostics_service import DiagnosticsService
 from services.search_service import SearchService
@@ -19,6 +19,7 @@ from ui.models.people_list_model import PeopleListModel
 from ui.models.source_tree_model import SourceTreeModel
 from ui.widgets.data_tab import DataTab
 from ui.widgets.search_tab import SearchTab
+from ui.theme_manager import ThemeManager
 
 
 class MainWindow(QMainWindow):
@@ -29,6 +30,7 @@ class MainWindow(QMainWindow):
         self.search_service = search_service
         self.diagnostics_service = diagnostics_service
         self.settings_service = settings_service
+        self.theme_manager = ThemeManager(QApplication.instance())
         self.source_root = source_root
 
         self.people_model = PeopleListModel()
@@ -55,6 +57,9 @@ class MainWindow(QMainWindow):
 
         self._create_menu()
         self.controller = AppController(self)
+        self.theme_manager.apply(self.settings_service.settings, self)
+        self.search_tab.theme_combo.setCurrentText(self.settings_service.settings.theme_preset)
+        self.search_tab.theme_combo.currentTextChanged.connect(self._theme_changed_from_search)
 
     def _create_menu(self) -> None:
         menu = self.menuBar().addMenu("Файл")
@@ -76,6 +81,30 @@ class MainWindow(QMainWindow):
 
     def open_settings(self) -> None:
         dlg = SettingsDialog(self.settings_service.settings, self)
+        dlg.btn_apply.clicked.connect(lambda: self._apply_settings_dialog(dlg, persist=True))
+        dlg.btn_restore.clicked.connect(lambda: self._restore_defaults(dlg))
+        dlg.theme_combo.currentTextChanged.connect(lambda: self._apply_settings_dialog(dlg, persist=False))
+        dlg.font_edit.textChanged.connect(lambda _v: self._apply_settings_dialog(dlg, persist=False))
+        dlg.font_size.valueChanged.connect(lambda _v: self._apply_settings_dialog(dlg, persist=False))
+        dlg.scale_edit.valueChanged.connect(lambda _v: self._apply_settings_dialog(dlg, persist=False))
         if dlg.exec():
-            st = dlg.build_settings(self.settings_service.settings)
+            self._apply_settings_dialog(dlg, persist=True)
+
+    def _apply_settings_dialog(self, dlg: SettingsDialog, persist: bool) -> None:
+        st = dlg.build_settings(self.settings_service.settings)
+        self.theme_manager.apply(st, self)
+        self.search_tab.theme_combo.setCurrentText(st.theme_preset)
+        if persist:
             self.settings_service.save(st)
+
+    def _restore_defaults(self, dlg: SettingsDialog) -> None:
+        defaults = self.settings_service.restore_defaults()
+        dlg.load_from(defaults)
+        self.theme_manager.apply(defaults, self)
+        self.search_tab.theme_combo.setCurrentText(defaults.theme_preset)
+
+    def _theme_changed_from_search(self, theme: str) -> None:
+        st = self.settings_service.settings
+        st.theme_preset = theme
+        self.theme_manager.apply(st, self)
+        self.settings_service.save(st)

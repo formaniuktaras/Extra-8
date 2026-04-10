@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 import zipfile
+import os
 from pathlib import Path
+
+import pytest
+try:
+    from PySide6.QtWidgets import QApplication
+except Exception:  # pragma: no cover
+    QApplication = None
 
 DOC_XML = """<?xml version='1.0' encoding='UTF-8'?>
 <w:document xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'>
@@ -25,3 +32,14 @@ def create_docx(path: Path, doc_xml: str = DOC_XML) -> Path:
         zf.writestr("word/styles.xml", STYLES_XML)
         zf.writestr("word/numbering.xml", NUMBERING_XML)
     return path
+
+
+@pytest.fixture(scope="session")
+def qapp():
+    if QApplication is None:
+        pytest.skip("PySide6 недоступний у тестовому середовищі")
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication([])
+    return app

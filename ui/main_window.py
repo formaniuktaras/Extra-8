@@ -172,6 +172,7 @@ class MainWindow(QMainWindow):
 
         apply_btn.clicked.connect(lambda: self._validate_and_apply_from_dialog(dlg, persist=True))
         restore_btn.clicked.connect(lambda: dlg.load_from(type(self.settings_service.settings)(), self.app_config_service.config))
+        restore_btn.clicked.connect(dlg.restore_default_summary_rules)
 
         if dlg.exec() and not self._validate_and_apply_from_dialog(dlg, persist=True):
             return

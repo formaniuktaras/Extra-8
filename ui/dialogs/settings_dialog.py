@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-
 from PySide6.QtGui import QColor, QFont, QFontDatabase
 from PySide6.QtWidgets import (
     QColorDialog,
@@ -26,7 +24,7 @@ from PySide6.QtWidgets import (
 
 from core.config import AppConfig
 from core.settings import UserSettings
-from domain.summary_rules import validate_rules_json
+from domain.summary_rules import default_summary_rules_json, validate_rules_json
 
 
 class SettingsDialog(QDialog):
@@ -212,15 +210,11 @@ class SettingsDialog(QDialog):
         if not self._font_exists(self.preview_font_edit.text()):
             return False, f"Preview font недоступний у системі: {self.preview_font_edit.text().strip() or '(порожньо)'}"
 
+        rules_text = self.rules_edit.toPlainText().strip() or "[]"
         try:
-            payload = json.loads(self.rules_edit.toPlainText() or "[]")
-            if not isinstance(payload, list):
-                return False, "Summary rules мають бути JSON-масивом"
-            validate_rules_json(self.rules_edit.toPlainText() or "[]")
+            validate_rules_json(rules_text)
         except ValueError as exc:
             return False, str(exc)
-        except Exception:
-            return False, "Summary rules містять невалідний JSON"
         return True, None
 
     def validate(self) -> tuple[bool, str | None]:
@@ -273,3 +267,6 @@ class SettingsDialog(QDialog):
 
     def show_validation_error(self, message: str) -> None:
         QMessageBox.warning(self, "Невалідні налаштування", message)
+
+    def restore_default_summary_rules(self) -> None:
+        self.rules_edit.setPlainText(default_summary_rules_json())

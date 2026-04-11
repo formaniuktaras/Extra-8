@@ -11,77 +11,187 @@ from services.indexing_service import CancellationToken, IndexingService
 from tests.conftest import create_docx
 
 
-def test_changed_new_removed_document_detection(tmp_path: Path):
-    source = tmp_path / "s"
-    output = tmp_path / "o"
+def _services(tmp_path: Path) -> tuple[Path, Path, SQLiteStore, SafeFileOperator, ExtractService, IndexingService]:
+    source = tmp_path / "source"
+    output = tmp_path / "output"
     source.mkdir()
     output.mkdir()
-    f1 = create_docx(source / "a.docx")
-    store = SQLiteStore(tmp_path / "i.sqlite3")
+    store = SQLiteStore(tmp_path / "index.sqlite3")
     file_ops = SafeFileOperator(TempManager())
     ext = ExtractService(file_ops, UserSettings().summary_rules_json)
-    svc = IndexingService(store, ext, source, output, file_ops)
-    d1 = svc.detect_changes()
-    assert len(d1.new_files) == 1
-    svc.full_rebuild()
-    d2 = svc.detect_changes()
-    assert not d2.new_files and not d2.changed_files
-    f1.write_bytes(f1.read_bytes() + b"x")
-    d3 = svc.detect_changes()
-    assert len(d3.changed_files) == 1
-    f1.unlink()
-    d4 = svc.detect_changes()
-    assert d4.removed_source_keys
+    idx = IndexingService(store, ext, source, output, file_ops)
+    return source, output, store, file_ops, ext, idx
 
 
-def test_file_replacement_rollback_behavior(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    tm = TempManager()
-    ops = SafeFileOperator(tm)
+def _doc_xml_for_person(person_line: str) -> str:
+    return f"""<?xml version='1.0' encoding='UTF-8'?>
+<w:document xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'>
+  <w:body>
+    <w:p><w:r><w:t>{person_line}</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Службовий текст</w:t></w:r></w:p>
+    <w:sectPr/>
+  </w:body>
+</w:document>
+"""
+
+
+def test_atomic_write_bytes_rolls_back_on_replace_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    _, _, _, ops, _, _ = _services(tmp_path)
     target = tmp_path / "x.bin"
     target.write_bytes(b"old")
-    tmp = ops._local_temp_path(target)
-    tmp.write_bytes(b"new")
 
     original_replace = Path.replace
 
     def failing_replace(self: Path, other: Path):
-        if self == tmp:
+        if self.name.startswith(f".{target.name}.") and self.suffix == ".tmp":
             raise RuntimeError("boom")
         return original_replace(self, other)
 
     monkeypatch.setattr(Path, "replace", failing_replace)
     with pytest.raises(RuntimeError):
-        ops.safe_replace_file(tmp, target)
+        ops.atomic_write_bytes(target, b"new")
 
     assert target.read_bytes() == b"old"
-    assert not tmp.exists()
+    assert not any(target.parent.glob(f".{target.name}.*.tmp"))
     assert not target.with_suffix(target.suffix + ".bak").exists()
 
 
-def test_cleanup_empty_nested_dirs(tmp_path: Path):
-    tm = TempManager()
-    ops = SafeFileOperator(tm)
+def test_atomic_write_bytes_does_not_leave_partial_file_on_new_target_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    _, _, _, ops, _, _ = _services(tmp_path)
+    target = tmp_path / "new.bin"
+
+    original_replace = Path.replace
+
+    def failing_replace(self: Path, other: Path):
+        if self.name.startswith(f".{target.name}.") and self.suffix == ".tmp":
+            raise RuntimeError("boom")
+        return original_replace(self, other)
+
+    monkeypatch.setattr(Path, "replace", failing_replace)
+    with pytest.raises(RuntimeError):
+        ops.atomic_write_bytes(target, b"payload")
+
+    assert not target.exists()
+    assert not any(target.parent.glob(f".{target.name}.*.tmp"))
+    assert not target.with_suffix(target.suffix + ".bak").exists()
+
+
+def test_remove_file_and_prune_empty_dirs_stops_at_boundary(tmp_path: Path):
+    _, _, _, ops, _, _ = _services(tmp_path)
     root = tmp_path / "generated"
-    nested = root / "a" / "b" / "c.txt"
-    nested.parent.mkdir(parents=True)
-    nested.write_text("x", encoding="utf-8")
-    ops.remove_file_and_prune_empty_dirs(nested, root)
+    nested_file = root / "a" / "b" / "c" / "x.docx"
+    nested_file.parent.mkdir(parents=True)
+    nested_file.write_bytes(b"x")
+
+    ops.remove_file_and_prune_empty_dirs(nested_file, stop_at=root)
+
+    assert root.exists()
     assert not (root / "a").exists()
 
 
-def test_cancellation_during_indexing(tmp_path: Path):
-    source = tmp_path / "s"
-    output = tmp_path / "o"
-    source.mkdir()
-    output.mkdir()
+def test_cleanup_orphan_generated_outputs_removes_unreferenced_files_only(tmp_path: Path):
+    _, _, _, ops, _, _ = _services(tmp_path)
+    output = tmp_path / "generated"
+    (output / "keep").mkdir(parents=True)
+    (output / "drop" / "sub").mkdir(parents=True)
+    keep = output / "keep" / "one.docx"
+    orphan = output / "drop" / "sub" / "old.docx"
+    keep.write_bytes(b"k")
+    orphan.write_bytes(b"o")
+
+    ops.cleanup_orphan_generated_outputs(output, {Path("keep/one.docx")})
+
+    assert keep.exists()
+    assert not orphan.exists()
+    assert not (output / "drop").exists()
+
+
+def test_changed_document_replaces_outputs_without_leaving_stale_files(tmp_path: Path):
+    source, output, store, _ops, _ext, idx = _services(tmp_path)
+    source_file = create_docx(source / "a.docx", _doc_xml_for_person("ПЕТРЕНКО Іван Іванович"))
+    idx.full_rebuild()
+    source_key = "a.docx"
+    first_rels = set(store.list_generated_rels_for_source_key(source_key))
+    assert first_rels
+
+    create_docx(source_file, _doc_xml_for_person("ІВАНЕНКО Петро Петрович"))
+    idx.full_rebuild()
+
+    second_rels = set(store.list_generated_rels_for_source_key(source_key))
+    assert second_rels
+    assert second_rels != first_rels
+    for rel in second_rels:
+        assert (output / rel).exists()
+    for rel in first_rels - second_rels:
+        assert not (output / rel).exists()
+
+
+def test_removed_document_cleans_db_and_generated_outputs(tmp_path: Path):
+    source, output, store, _ops, _ext, idx = _services(tmp_path)
+    source_file = create_docx(source / "a.docx")
+    idx.full_rebuild()
+    generated = set(store.list_generated_rels_for_source_key("a.docx"))
+    assert generated
+
+    source_file.unlink()
+    idx.full_rebuild()
+
+    assert not store.list_documents()
+    for rel in generated:
+        assert not (output / rel).exists()
+
+
+def test_full_rebuild_cleans_orphan_outputs_after_success(tmp_path: Path):
+    source, output, store, _ops, _ext, idx = _services(tmp_path)
     create_docx(source / "a.docx")
-    store = SQLiteStore(tmp_path / "i.sqlite3")
-    file_ops = SafeFileOperator(TempManager())
-    ext = ExtractService(file_ops, UserSettings().summary_rules_json)
-    svc = IndexingService(store, ext, source, output, file_ops)
-    token = CancellationToken(is_cancelled=True)
+    idx.full_rebuild()
+
+    orphan = output / "orphan" / "ghost.docx"
+    orphan.parent.mkdir(parents=True)
+    orphan.write_bytes(b"ghost")
+    assert orphan.exists()
+
+    idx.full_rebuild()
+
+    assert not orphan.exists()
+    assert not (output / "orphan").exists()
+    assert store.list_all_generated_rels()
+
+
+def test_cancelled_rebuild_does_not_destroy_previous_valid_outputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    source, output, store, _ops, ext, idx = _services(tmp_path)
+    source_file = create_docx(source / "a.docx", _doc_xml_for_person("ПЕТРЕНКО Іван Іванович"))
+    idx.full_rebuild()
+    old_rels = set(store.list_generated_rels_for_source_key("a.docx"))
+    assert old_rels
+
+    create_docx(source_file, _doc_xml_for_person("ІВАНЕНКО Петро Петрович"))
+
+    original_build = ext.build_extracts_for_doc
+
+    def cancelled_build(*args, **kwargs):
+        extracts = original_build(*args, **kwargs)
+        raise RuntimeError("Operation cancelled")
+
+    monkeypatch.setattr(ext, "build_extracts_for_doc", cancelled_build)
+    token = CancellationToken()
     with pytest.raises(RuntimeError):
-        svc.full_rebuild(token=token)
+        idx.full_rebuild(token=token)
+
+    assert set(store.list_generated_rels_for_source_key("a.docx")) == old_rels
+    for rel in old_rels:
+        assert (output / rel).exists()
+
+
+def test_db_never_points_to_missing_generated_file_after_successful_rebuild(tmp_path: Path):
+    source, output, store, _ops, _ext, idx = _services(tmp_path)
+    create_docx(source / "a.docx")
+    create_docx(source / "b.docx", _doc_xml_for_person("ІВАНЕНКО Петро Петрович"))
+
+    idx.full_rebuild()
+
+    for rel in store.list_all_generated_rels():
+        assert (output / rel).exists()
 
 
 def test_default_context_strategy_includes_heading() -> None:

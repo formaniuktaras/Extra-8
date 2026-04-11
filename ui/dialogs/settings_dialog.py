@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtGui import QColor, QFont, QFontDatabase
 from PySide6.QtWidgets import (
     QColorDialog,
@@ -25,6 +27,8 @@ from PySide6.QtWidgets import (
 from core.config import AppConfig
 from core.settings import UserSettings
 from domain.summary_rules import default_summary_rules_json, validate_rules_json
+
+logger = logging.getLogger(__name__)
 
 
 class SettingsDialog(QDialog):
@@ -211,6 +215,7 @@ class SettingsDialog(QDialog):
             return False, f"Preview font недоступний у системі: {self.preview_font_edit.text().strip() or '(порожньо)'}"
 
         rules_text = self.rules_edit.toPlainText().strip() or "[]"
+        logger.debug("Summary rules trace in SettingsDialog: rules_edit.toPlainText()=%r", rules_text)
         try:
             validate_rules_json(rules_text)
         except ValueError as exc:

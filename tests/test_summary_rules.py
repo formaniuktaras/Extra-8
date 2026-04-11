@@ -8,6 +8,7 @@ from domain.summary_rules import (
     default_summary_rules_json,
     fallback_summary,
     parse_rules,
+    serialize_rules,
 )
 from services.extract_service import ExtractService
 
@@ -91,6 +92,19 @@ def test_summary_rules_roundtrip_integrity():
     """
     rules = parse_rules(payload)
     assert rules[0].compile().search("Наказ № 1")
+
+
+def test_summary_rules_strict_pattern_roundtrip_parse_serialize_parse():
+    original_json = """
+    [
+      {"name":"named","enabled":true,"pattern":"(?P<order_num>№\\\\s*\\\\d+)","flags":"IGNORECASE","template":"{order_num}"},
+      {"name":"name","enabled":true,"pattern":"(?P<name>\\\\w+)","flags":"","template":"{name}"}
+    ]
+    """
+    first_parse = parse_rules(original_json)
+    serialized = serialize_rules(first_parse)
+    second_parse = parse_rules(serialized)
+    assert [rule.pattern for rule in first_parse] == [rule.pattern for rule in second_parse]
 
 
 def test_invalid_regex_rule_is_rejected_without_overwriting_active_rules():

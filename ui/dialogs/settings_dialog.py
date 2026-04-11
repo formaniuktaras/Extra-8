@@ -72,7 +72,8 @@ class SettingsDialog(QDialog):
         self.scale_edit.setSingleStep(0.05)
         self.scale_edit.setValue(settings.scale_factor)
 
-        self.rules_edit = QTextEdit(settings.summary_rules_json)
+        self.rules_edit = QTextEdit()
+        self.rules_edit.setPlainText(settings.summary_rules_json)
 
         general = QWidget()
         fg = QFormLayout(general)
@@ -226,6 +227,8 @@ class SettingsDialog(QDialog):
         return self.validate_user_settings()
 
     def build_settings(self, base: UserSettings) -> UserSettings:
+        rules_text = self.rules_edit.toPlainText()
+        logger.debug("Summary rules trace in SettingsDialog.build_settings: rules_edit.toPlainText()=%r", rules_text)
         return UserSettings(
             theme_preset=self.theme_combo.currentText().strip() or "system",
             accent_color=QColor(self.accent_edit.text().strip()).name().upper(),
@@ -235,7 +238,7 @@ class SettingsDialog(QDialog):
             preview_font_size=int(self.preview_font_size.value()),
             scale_factor=float(self.scale_edit.value()),
             summary_unit=self.summary_unit_edit.text().strip() or "в/ч",
-            summary_rules_json=self.rules_edit.toPlainText(),
+            summary_rules_json=rules_text,
             window_geometry_b64=base.window_geometry_b64,
             window_state_b64=base.window_state_b64,
             splitter_states_b64=dict(base.splitter_states_b64),

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
-from typing import Protocol
+from typing import Mapping, Protocol
 
 from domain.models import PersonExtract
 from domain.name_normalization import detect_person_names, normalize_person_key
@@ -51,8 +52,44 @@ class ExtractService:
         rules_json: str,
         selection_strategy: ExtractSelectionStrategy | None = None,
     ) -> None:
+        self.rules_json = rules_json
         self.rules = parse_rules(rules_json)
         self.selection_strategy = selection_strategy or DefaultContextStrategy()
+
+    def update_rules(self, rules_json: str) -> None:
+        self.rules = parse_rules(rules_json)
+        self.rules_json = rules_json
+
+    def summarize_record(self, row: Mapping[str, object]) -> str:
+        person_name = str(row.get("person_name") or "").strip()
+        if not person_name:
+            return ""
+        block_indices: list[int] = []
+        raw_blocks = row.get("paragraphs_json")
+        if isinstance(raw_blocks, str):
+            try:
+                payload = json.loads(raw_blocks)
+                if isinstance(payload, list):
+                    block_indices = [int(v) for v in payload]
+            except Exception:
+                block_indices = []
+        paragraphs: list[str] = []
+        raw_paragraphs = row.get("paragraphs_text")
+        if isinstance(raw_paragraphs, str):
+            try:
+                payload = json.loads(raw_paragraphs)
+                if isinstance(payload, list):
+                    paragraphs = [str(v) for v in payload]
+            except Exception:
+                paragraphs = []
+        extract = PersonExtract(
+            person_name=person_name,
+            person_name_norm=str(row.get("person_name_norm") or normalize_person_key(person_name)),
+            block_indices=block_indices,
+            generated_rel=str(row.get("generated_rel") or ""),
+            paragraphs_text=paragraphs,
+        )
+        return apply_summary_rules(self.rules, "\n".join(paragraphs), extract)
 
     def build_extracts_for_doc(self, doc, output_root: Path, source_rel: str) -> list[PersonExtract]:
         _ = output_root, source_rel

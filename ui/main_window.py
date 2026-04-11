@@ -104,8 +104,10 @@ class MainWindow(QMainWindow):
 
         new_settings = dlg.build_settings(self.settings_service.settings)
         new_config = dlg.build_config(self.app_config_service.config)
+        return self.apply_settings(new_settings, new_config, persist=persist)
 
-        self.theme_manager.apply(new_settings, self)
+    def apply_settings(self, new_settings, new_config, *, persist: bool) -> bool:
+        self.controller.on_settings_applied(new_settings)
         self.search_tab.theme_combo.blockSignals(True)
         self.search_tab.theme_combo.setCurrentText(new_settings.theme_preset)
         self.search_tab.theme_combo.blockSignals(False)
@@ -138,14 +140,6 @@ class MainWindow(QMainWindow):
         apply_btn.clicked.connect(lambda: self._validate_and_apply_from_dialog(dlg, persist=True))
         restore_btn.clicked.connect(lambda: dlg.load_from(type(self.settings_service.settings)(), self.app_config_service.config))
 
-        dlg.theme_combo.currentTextChanged.connect(lambda _v: self._validate_and_apply_from_dialog(dlg, persist=False))
-        dlg.accent_edit.textChanged.connect(lambda _v: self._validate_and_apply_from_dialog(dlg, persist=False))
-        dlg.ui_font_edit.textChanged.connect(lambda _v: self._validate_and_apply_from_dialog(dlg, persist=False))
-        dlg.ui_font_size.valueChanged.connect(lambda _v: self._validate_and_apply_from_dialog(dlg, persist=False))
-        dlg.preview_font_edit.textChanged.connect(lambda _v: self._validate_and_apply_from_dialog(dlg, persist=False))
-        dlg.preview_font_size.valueChanged.connect(lambda _v: self._validate_and_apply_from_dialog(dlg, persist=False))
-        dlg.scale_edit.valueChanged.connect(lambda _v: self._validate_and_apply_from_dialog(dlg, persist=False))
-
         if dlg.exec() and not self._validate_and_apply_from_dialog(dlg, persist=True):
             return
 
@@ -163,7 +157,7 @@ class MainWindow(QMainWindow):
     def _theme_changed_from_search(self, theme: str) -> None:
         st = self.settings_service.settings
         st.theme_preset = theme
-        self.theme_manager.apply(st, self)
+        self.controller.on_settings_applied(st)
         self.settings_service.save(st)
 
     def _restore_ui_state(self) -> None:

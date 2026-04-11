@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from string import Formatter
 from typing import Pattern
 
 from domain.models import PersonExtract
@@ -32,8 +33,26 @@ def parse_rules(raw_json: str) -> list[SummaryRule]:
         for field in ("name", "enabled", "pattern", "flags", "template"):
             if field not in row:
                 raise ValueError(f"Missing field: {field}")
-        rules.append(SummaryRule(**row))
+        rule = SummaryRule(**row)
+        if not rule.template.strip():
+            raise ValueError(f"Template cannot be empty for rule: {rule.name}")
+        try:
+            rule.compile()
+        except re.error as exc:
+            raise ValueError(f"Invalid pattern for rule '{rule.name}': {exc}") from exc
+        rules.append(rule)
     return rules
+
+
+def validate_rules_json(raw_json: str) -> None:
+    rules = parse_rules(raw_json)
+    formatter = Formatter()
+    for rule in rules:
+        for _, field_name, _, _ in formatter.parse(rule.template):
+            if field_name is None:
+                continue
+            if not field_name.strip():
+                raise ValueError(f"Invalid placeholder in rule '{rule.name}'")
 
 
 def apply_summary_rules(rules: list[SummaryRule], text: str, extract: PersonExtract) -> str:

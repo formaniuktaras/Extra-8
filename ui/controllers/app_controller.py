@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 
 from services.preview_service import EXTRACT_UNAVAILABLE_TEXT, PreviewService, SOURCE_READ_ERROR_TEXT
 from services.preview_types import StructuredPreview
+from core.settings import UserSettings
 from ui.models.progress_state import ProgressState
 from ui.workers.indexing_worker import IndexingWorker
 from ui.workers.quick_check_worker import QuickCheckWorker
@@ -91,7 +92,7 @@ class AppController(QObject):
         if not preview_text:
             preview_text = EXTRACT_UNAVAILABLE_TEXT
         self.win.search_tab.extract_preview.setPlainText(preview_text)
-        self.win.search_tab.summary_preview.setPlainText(item.get("summary_text") or "")
+        self.win.search_tab.summary_preview.setPlainText(self.win.indexing_service.extract_service.summarize_record(item))
 
     def open_source_docx_from_search(self) -> None:
         idx = self.win.search_tab.extracts_list.currentIndex()
@@ -293,9 +294,10 @@ class AppController(QObject):
             self.win.data_tab.set_extract_summary("", "")
             self._render_source_preview(self.preview_service.build_highlighted_source_preview(source_path, []))
             return
+        summary_text = self.win.indexing_service.extract_service.summarize_record(extract)
         self.win.data_tab.set_extract_summary(
             extract.get("person_name") or "",
-            extract.get("summary_text") or "",
+            summary_text,
         )
         try:
             selected_indices = json.loads(extract.get("paragraphs_json") or "[]")
@@ -305,6 +307,19 @@ class AppController(QObject):
             selected_indices = []
         structured = self.preview_service.build_highlighted_source_preview(source_path, selected_indices)
         self._render_source_preview(structured)
+
+    def on_settings_applied(self, new_settings: UserSettings) -> None:
+        self.win.theme_manager.apply(new_settings, self.win)
+        self.win.indexing_service.extract_service.update_rules(new_settings.summary_rules_json)
+        self._refresh_current_previews()
+
+    def _refresh_current_previews(self) -> None:
+        current_extract_idx = self.win.search_tab.extracts_list.currentIndex()
+        if current_extract_idx.isValid():
+            self.extract_selected(current_extract_idx)
+        data_idx = self.win.data_tab.extracts_list.currentRow()
+        if self._current_preview_source is not None:
+            self._render_data_extract_by_index(data_idx, self._current_preview_source)
 
     def _render_source_preview(self, structured: StructuredPreview) -> None:
         panel = self.win.data_tab.full_preview

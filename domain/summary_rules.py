@@ -44,13 +44,7 @@ class SummaryRule:
     def compile(self) -> Pattern[str]:
         if not isinstance(self.pattern, str):
             raise ValueError(f"Invalid pattern in rule '{self.name}': pattern must be a string")
-        if "?P[" in self.pattern:
-            raise ValueError(
-                f"Invalid pattern in rule '{self.name}':\n"
-                f"Pattern: {self.pattern}\n"
-                "Error: Можливо пошкоджено regex (очікується ?P<...>)\n"
-                f"Position: {self.pattern.find('?P[')}"
-            )
+        logger.debug("Summary rules trace before compile: rule=%r pattern=%r", self.name, self.pattern)
         try:
             return re.compile(self.pattern, _parse_flags(self.flags, self.name))
         except re.error as exc:
@@ -78,6 +72,10 @@ def _serialize_rules(rules: list[SummaryRule]) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
+def serialize_rules(rules: list[SummaryRule]) -> str:
+    return _serialize_rules(rules)
+
+
 def _parse_flags(flags: str, rule_name: str) -> int:
     if not isinstance(flags, str):
         raise ValueError(f"Invalid flags for rule '{rule_name}': expected string")
@@ -95,10 +93,12 @@ def _parse_flags(flags: str, rule_name: str) -> int:
 
 
 def parse_rules(raw_json: str) -> list[SummaryRule]:
+    logger.debug("Summary rules trace before parse_rules: raw_json=%r", raw_json)
     try:
         data = json.loads(raw_json)
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid JSON for summary rules at line {exc.lineno}, column {exc.colno}: {exc.msg}") from exc
+    logger.debug("Summary rules trace after json.loads: parsed_data=%r", data)
     if not isinstance(data, list):
         raise ValueError("Summary rules must be list")
     rules = _parse_rules_payload(data)
@@ -126,6 +126,11 @@ def _parse_rules_payload(data: object) -> list[SummaryRule]:
             raise ValueError(f"Rule #{index + 1}: flags must be string")
         if not isinstance(row["template"], str):
             raise ValueError(f"Rule #{index + 1}: template must be string")
+        logger.debug(
+            "Summary rules trace before SummaryRule: rule=%r pattern=%r",
+            row["name"],
+            row["pattern"],
+        )
         rule = SummaryRule(
             name=row["name"],
             enabled=row["enabled"],

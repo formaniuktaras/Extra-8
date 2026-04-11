@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -11,6 +12,8 @@ from infra.filesystem.file_ops import SafeFileOperator
 from infra.filesystem.source_scanner import scan_docx_files
 from infra.storage.sqlite_store import SQLiteStore
 from services.extract_service import ExtractService
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -92,14 +95,17 @@ class IndexingService:
             stale_paths = [self.output_root / rel for rel in self.store.list_generated_rels_for_source_key(key)]
             self.file_ops.cleanup_stale_generated_outputs(self.output_root, stale_paths)
             self.store.delete_document_by_source_key(key)
+
         files = diff.new_files + diff.changed_files
         total = len(files)
         for i, path in enumerate(files, 1):
             if token:
                 token.throw_if_cancelled()
             rel = path.relative_to(self.source_root).as_posix()
+            source_key = rel.lower()
+            old_generated_rels = set(self.store.list_generated_rels_for_source_key(source_key))
             doc_model = SourceDocument(
-                source_key=rel.lower(),
+                source_key=source_key,
                 source_rel=rel,
                 source_abs=path,
                 mtime=path.stat().st_mtime,
@@ -107,10 +113,25 @@ class IndexingService:
                 sha1=file_sha1(path),
             )
             doc_id = self.store.upsert_document(doc_model)
-            parsed = read_docx(path)
-            extracts = self.extract_service.build_extracts_for_doc(parsed, self.output_root, rel)
-            if token:
-                token.throw_if_cancelled()
-            self.store.replace_extracts_for_document(doc_id, extracts)
+
+            try:
+                parsed = read_docx(path)
+                extracts = self.extract_service.build_extracts_for_doc(parsed, self.output_root, rel)
+                if token:
+                    token.throw_if_cancelled()
+                self.store.replace_extracts_for_document(doc_id, extracts)
+            except RuntimeError:
+                if token and token.is_cancelled:
+                    logger.info("Indexing cancelled while processing source: %s", rel)
+                self.file_ops.cleanup_orphan_generated_outputs(self.output_root, self.store.list_all_generated_rels())
+                raise
+
+            new_generated_rels = {e.generated_rel for e in extracts}
+            stale_rels = old_generated_rels - new_generated_rels
+            if stale_rels:
+                self.file_ops.cleanup_stale_generated_outputs(self.output_root, [self.output_root / rel for rel in stale_rels])
+
             if on_progress:
                 on_progress("indexing", i, total)
+
+        self.file_ops.cleanup_orphan_generated_outputs(self.output_root, self.store.list_all_generated_rels())

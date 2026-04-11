@@ -135,6 +135,12 @@ class SQLiteStore:
             ).fetchall()
         return [str(r["generated_rel"]) for r in rows]
 
+
+    def list_all_generated_rels(self) -> list[str]:
+        with self.connection_factory.connection() as conn:
+            rows = conn.execute("SELECT generated_rel FROM extracts").fetchall()
+        return [str(r["generated_rel"]) for r in rows]
+
     def search_people(self, filter_keys: set[str], limit: int = 200) -> list[sqlite3.Row]:
         with self.connection_factory.connection() as conn:
             if not filter_keys:

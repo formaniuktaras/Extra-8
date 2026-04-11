@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QFont, QFontDatabase
 from PySide6.QtWidgets import (
     QColorDialog,
     QComboBox,
@@ -19,6 +18,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QTabWidget,
     QTextEdit,
+    QFontDialog,
     QVBoxLayout,
     QWidget,
     QDoubleSpinBox,
@@ -54,10 +54,14 @@ class SettingsDialog(QDialog):
 
         # Шрифти
         self.ui_font_edit = QLineEdit(settings.ui_font_family)
+        self.ui_font_pick_btn = QPushButton("Вибрати…")
+        self.ui_font_info = QLabel()
         self.ui_font_size = QSpinBox()
         self.ui_font_size.setRange(8, 48)
         self.ui_font_size.setValue(settings.ui_font_size)
         self.preview_font_edit = QLineEdit(settings.preview_font_family)
+        self.preview_font_pick_btn = QPushButton("Вибрати…")
+        self.preview_font_info = QLabel()
         self.preview_font_size = QSpinBox()
         self.preview_font_size.setRange(8, 48)
         self.preview_font_size.setValue(settings.preview_font_size)
@@ -85,9 +89,9 @@ class SettingsDialog(QDialog):
 
         fonts = QWidget()
         ff = QFormLayout(fonts)
-        ff.addRow("UI шрифт", self.ui_font_edit)
+        ff.addRow("UI шрифт", self._font_row(self.ui_font_edit, self.ui_font_pick_btn, self.ui_font_info))
         ff.addRow("UI розмір", self.ui_font_size)
-        ff.addRow("Preview шрифт", self.preview_font_edit)
+        ff.addRow("Preview шрифт", self._font_row(self.preview_font_edit, self.preview_font_pick_btn, self.preview_font_info))
         ff.addRow("Preview розмір", self.preview_font_size)
         ff.addRow("Масштаб", self.scale_edit)
 
@@ -111,7 +115,13 @@ class SettingsDialog(QDialog):
 
         self.accent_pick_btn.clicked.connect(self._pick_accent)
         self.accent_edit.textChanged.connect(self._update_accent_preview)
+        self.ui_font_pick_btn.clicked.connect(lambda: self._pick_font(self.ui_font_edit))
+        self.preview_font_pick_btn.clicked.connect(lambda: self._pick_font(self.preview_font_edit))
+        self.ui_font_edit.textChanged.connect(lambda value: self._update_font_info(value, self.ui_font_info))
+        self.preview_font_edit.textChanged.connect(lambda value: self._update_font_info(value, self.preview_font_info))
         self._update_accent_preview(self.accent_edit.text())
+        self._update_font_info(self.ui_font_edit.text(), self.ui_font_info)
+        self._update_font_info(self.preview_font_edit.text(), self.preview_font_info)
 
     def _path_row(self, edit: QLineEdit, callback) -> QWidget:
         row = QWidget()
@@ -131,6 +141,15 @@ class SettingsDialog(QDialog):
         lay.addWidget(self.accent_edit)
         lay.addWidget(self.accent_preview)
         lay.addWidget(self.accent_pick_btn)
+        return row
+
+    def _font_row(self, edit: QLineEdit, pick_btn: QPushButton, info_label: QLabel) -> QWidget:
+        row = QWidget()
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(edit)
+        lay.addWidget(info_label)
+        lay.addWidget(pick_btn)
         return row
 
     def _browse_source_dir(self) -> None:
@@ -153,12 +172,33 @@ class SettingsDialog(QDialog):
         if selected.isValid():
             self.accent_edit.setText(selected.name().upper())
 
+    def _pick_font(self, target_edit: QLineEdit) -> None:
+        initial = QFont(target_edit.text().strip() or "Segoe UI")
+        selected, ok = QFontDialog.getFont(initial, self, "Оберіть шрифт")
+        if ok:
+            target_edit.setText(selected.family())
+
     def _update_accent_preview(self, value: str) -> None:
         color = QColor(value.strip())
         swatch = color.name().upper() if color.isValid() else "#444444"
         self.accent_preview.setStyleSheet(f"background: {swatch}; border: 1px solid #999;")
 
-    def validate(self) -> tuple[bool, str | None]:
+    def _update_font_info(self, family: str, info_label: QLabel) -> None:
+        if self._font_exists(family):
+            info_label.setText("✓")
+            info_label.setToolTip("Шрифт доступний у системі")
+        else:
+            info_label.setText("⚠")
+            info_label.setToolTip("Шрифт не знайдено в системі")
+
+    @staticmethod
+    def _font_exists(family: str) -> bool:
+        normalized = family.strip().casefold()
+        if not normalized:
+            return False
+        return normalized in {name.casefold() for name in QFontDatabase.families()}
+
+    def validate_user_settings(self) -> tuple[bool, str | None]:
         if not QColor(self.accent_edit.text().strip()).isValid():
             return False, "Некоректний accent color"
         if not (0.75 <= float(self.scale_edit.value()) <= 2.0):
@@ -167,17 +207,10 @@ class SettingsDialog(QDialog):
             return False, "Некоректний UI font size"
         if not (8 <= int(self.preview_font_size.value()) <= 48):
             return False, "Некоректний preview font size"
-
-        for label, value, must_exist in [
-            ("source directory", self.source_dir_edit.text().strip(), True),
-            ("output directory", self.output_dir_edit.text().strip(), False),
-            ("index file", self.index_file_edit.text().strip(), False),
-        ]:
-            if not value:
-                return False, f"Поле {label} не може бути порожнім"
-            p = Path(value)
-            if must_exist and not p.exists():
-                return False, f"Шлях не існує: {value}"
+        if not self._font_exists(self.ui_font_edit.text()):
+            return False, f"UI font недоступний у системі: {self.ui_font_edit.text().strip() or '(порожньо)'}"
+        if not self._font_exists(self.preview_font_edit.text()):
+            return False, f"Preview font недоступний у системі: {self.preview_font_edit.text().strip() or '(порожньо)'}"
 
         try:
             payload = json.loads(self.rules_edit.toPlainText() or "[]")
@@ -189,6 +222,9 @@ class SettingsDialog(QDialog):
         except Exception:
             return False, "Summary rules містять невалідний JSON"
         return True, None
+
+    def validate(self) -> tuple[bool, str | None]:
+        return self.validate_user_settings()
 
     def build_settings(self, base: UserSettings) -> UserSettings:
         return UserSettings(
@@ -232,6 +268,8 @@ class SettingsDialog(QDialog):
         self.source_dir_edit.setText(config.source_directory)
         self.output_dir_edit.setText(config.output_directory)
         self.index_file_edit.setText(config.index_file)
+        self._update_font_info(self.ui_font_edit.text(), self.ui_font_info)
+        self._update_font_info(self.preview_font_edit.text(), self.preview_font_info)
 
     def show_validation_error(self, message: str) -> None:
         QMessageBox.warning(self, "Невалідні налаштування", message)

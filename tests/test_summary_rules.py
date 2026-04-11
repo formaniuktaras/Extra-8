@@ -73,6 +73,26 @@ def test_named_group_pattern_compiles_correctly():
     assert rules[0].compile().search("Наказ № 777").group("order_num") == "№ 777"
 
 
+def test_regex_named_groups_not_corrupted():
+    payload = """
+    [
+      {"name":"named","enabled":true,"pattern":"(?P<order_num>№\\\\s*\\\\d+)","flags":"IGNORECASE","template":"{order_num}"}
+    ]
+    """
+    rules = parse_rules(payload)
+    assert rules[0].pattern == "(?P<order_num>№\\s*\\d+)"
+
+
+def test_summary_rules_roundtrip_integrity():
+    payload = """
+    [
+      {"name":"named","enabled":true,"pattern":"(?P<order_num>№\\\\s*\\\\d+)","flags":"IGNORECASE","template":"{order_num}"}
+    ]
+    """
+    rules = parse_rules(payload)
+    assert rules[0].compile().search("Наказ № 1")
+
+
 def test_invalid_regex_rule_is_rejected_without_overwriting_active_rules():
     service = ExtractService(default_summary_rules_json())
     before = service.rules_json
@@ -92,6 +112,16 @@ def test_invalid_regex_rule_is_rejected_without_overwriting_active_rules():
             "generated_rel": "a.docx",
         }
     )
+
+
+def test_invalid_regex_does_not_override_existing_rules():
+    service = ExtractService(default_summary_rules_json())
+    before = service.rules_json
+
+    with pytest.raises(ValueError):
+        service.update_rules('[{"name":"broken","enabled":true,"pattern":"(?P[bad","flags":"","template":"x"}]')
+
+    assert service.rules_json == before
 
 
 def test_apply_updates_summary_rules_immediately():
@@ -125,6 +155,21 @@ def test_restore_defaults_restores_valid_rules(qapp):
     assert parse_rules(dialog.rules_edit.toPlainText())
 
 
+def test_restore_defaults_produces_valid_rules(qapp):
+    SettingsDialog = pytest.importorskip("ui.dialogs.settings_dialog", exc_type=ImportError).SettingsDialog
+    dialog = SettingsDialog(UserSettings(summary_rules_json='[{"name":"broken","enabled":true,"pattern":"(?P[bad","flags":"","template":"x"}]'), AppConfig())
+    dialog.restore_default_summary_rules()
+    parsed = parse_rules(dialog.rules_edit.toPlainText())
+    assert parsed
+
+
+def test_pattern_with_named_groups_compiles():
+    rules = parse_rules(
+        '[{"name":"named","enabled":true,"pattern":"(?P<name>\\\\w+)","flags":"","template":"{name}"}]'
+    )
+    assert rules[0].compile().search("hello").group("name") == "hello"
+
+
 def test_json_error_and_regex_error_are_reported_separately(qapp):
     SettingsDialog = pytest.importorskip("ui.dialogs.settings_dialog", exc_type=ImportError).SettingsDialog
     dialog = SettingsDialog(UserSettings(), AppConfig())
@@ -140,4 +185,5 @@ def test_json_error_and_regex_error_are_reported_separately(qapp):
     assert not ok_json
     assert "Invalid JSON" in (message_json or "")
     assert not ok_regex
-    assert "Invalid pattern for rule 'broken'" in (message_regex or "")
+    assert "Invalid pattern in rule 'broken'" in (message_regex or "")
+    assert "Pattern: (?P[bad" in (message_regex or "")

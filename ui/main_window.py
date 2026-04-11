@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QTimer
@@ -97,39 +98,71 @@ class MainWindow(QMainWindow):
         DiagnosticsDialog(report, self).exec()
 
     def _validate_and_apply_from_dialog(self, dlg: SettingsDialog, persist: bool) -> bool:
-        ok, error = dlg.validate()
+        ok, error = dlg.validate_user_settings()
         if not ok:
             dlg.show_validation_error(error or "Невалідні налаштування")
             return False
 
         new_settings = dlg.build_settings(self.settings_service.settings)
         new_config = dlg.build_config(self.app_config_service.config)
-        return self.apply_settings(new_settings, new_config, persist=persist)
+        config_changed = new_config != self.app_config_service.config
+        if config_changed:
+            config_ok, config_error = self.app_config_service.validate(new_config)
+            if not config_ok:
+                dlg.show_validation_error(config_error or "Невалідний app config")
+                return False
+        return self.apply_settings(new_settings, new_config, persist=persist, config_changed=config_changed)
 
-    def apply_settings(self, new_settings, new_config, *, persist: bool) -> bool:
+    @staticmethod
+    def _clone_settings(settings):
+        return replace(
+            settings,
+            splitter_states_b64=dict(settings.splitter_states_b64),
+            recent_source_dirs=list(settings.recent_source_dirs),
+            recent_output_dirs=list(settings.recent_output_dirs),
+            recent_index_files=list(settings.recent_index_files),
+        )
+
+    def _apply_settings_to_live_ui(self, new_settings) -> None:
         self.controller.on_settings_applied(new_settings)
         self.search_tab.theme_combo.blockSignals(True)
         self.search_tab.theme_combo.setCurrentText(new_settings.theme_preset)
         self.search_tab.theme_combo.blockSignals(False)
 
+    def apply_settings(self, new_settings, new_config, *, persist: bool, config_changed: bool | None = None) -> bool:
+        config_changed = new_config != self.app_config_service.config if config_changed is None else config_changed
         if persist:
-            self.settings_service.add_recent_source_dir(new_config.source_directory)
-            self.settings_service.add_recent_output_dir(new_config.output_directory)
-            self.settings_service.add_recent_index_file(new_config.index_file)
-            new_settings.recent_source_dirs = self.settings_service.settings.recent_source_dirs
-            new_settings.recent_output_dirs = self.settings_service.settings.recent_output_dirs
-            new_settings.recent_index_files = self.settings_service.settings.recent_index_files
-            saved, reason = self.settings_service.try_save(new_settings)
+            current_settings = self._clone_settings(self.settings_service.settings)
+            settings_to_save = self._clone_settings(new_settings)
+            settings_to_save.recent_source_dirs = self.settings_service._push_recent(
+                list(current_settings.recent_source_dirs), new_config.source_directory
+            )
+            settings_to_save.recent_output_dirs = self.settings_service._push_recent(
+                list(current_settings.recent_output_dirs), new_config.output_directory
+            )
+            settings_to_save.recent_index_files = self.settings_service._push_recent(
+                list(current_settings.recent_index_files), new_config.index_file
+            )
+            saved, reason = self.settings_service.try_save(settings_to_save)
             if not saved:
                 QMessageBox.critical(self, "Помилка", f"Не вдалося зберегти settings: {reason or 'невідома помилка'}")
                 return False
-            try:
-                self.app_config_service.save(new_config)
-            except Exception as exc:
-                logger.exception("Failed to save app config")
-                QMessageBox.critical(self, "Помилка", f"Не вдалося зберегти config: {exc}")
-                return False
-            self._apply_runtime_paths()
+            if config_changed:
+                try:
+                    self.app_config_service.save(new_config)
+                except Exception as exc:
+                    logger.exception("Failed to save app config")
+                    try:
+                        self.settings_service.save(current_settings)
+                    except Exception:
+                        logger.exception("Failed to rollback settings after config save failure")
+                    QMessageBox.critical(self, "Помилка", f"Не вдалося зберегти config: {exc}")
+                    return False
+            self._apply_settings_to_live_ui(settings_to_save)
+            if config_changed:
+                self._apply_runtime_paths()
+            return True
+        self._apply_settings_to_live_ui(new_settings)
         return True
 
     def open_settings(self) -> None:
@@ -155,10 +188,9 @@ class MainWindow(QMainWindow):
         self.data_tab.tree.setRootIndex(self.source_model.index(str(source_root)))
 
     def _theme_changed_from_search(self, theme: str) -> None:
-        st = self.settings_service.settings
+        st = self._clone_settings(self.settings_service.settings)
         st.theme_preset = theme
-        self.controller.on_settings_applied(st)
-        self.settings_service.save(st)
+        self.apply_settings(st, self.app_config_service.config, persist=True, config_changed=False)
 
     def _restore_ui_state(self) -> None:
         st = self.settings_service.settings

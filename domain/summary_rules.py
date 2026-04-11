@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from string import Formatter
 from typing import Pattern
 
 from domain.models import PersonExtract
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_SUMMARY_RULES: list[dict[str, object]] = [
     {
@@ -39,7 +42,40 @@ class SummaryRule:
     template: str
 
     def compile(self) -> Pattern[str]:
-        return re.compile(self.pattern, _parse_flags(self.flags, self.name))
+        if not isinstance(self.pattern, str):
+            raise ValueError(f"Invalid pattern in rule '{self.name}': pattern must be a string")
+        if "?P[" in self.pattern:
+            raise ValueError(
+                f"Invalid pattern in rule '{self.name}':\n"
+                f"Pattern: {self.pattern}\n"
+                "Error: Можливо пошкоджено regex (очікується ?P<...>)\n"
+                f"Position: {self.pattern.find('?P[')}"
+            )
+        try:
+            return re.compile(self.pattern, _parse_flags(self.flags, self.name))
+        except re.error as exc:
+            logger.error("Failed to compile summary regex for rule '%s': %r", self.name, self.pattern)
+            pos = exc.pos if exc.pos is not None else "n/a"
+            raise ValueError(
+                f"Invalid pattern in rule '{self.name}':\n"
+                f"Pattern: {self.pattern}\n"
+                f"Error: {exc.msg}\n"
+                f"Position: {pos}"
+            ) from exc
+
+
+def _serialize_rules(rules: list[SummaryRule]) -> str:
+    payload = [
+        {
+            "name": rule.name,
+            "enabled": rule.enabled,
+            "pattern": rule.pattern,
+            "flags": rule.flags,
+            "template": rule.template,
+        }
+        for rule in rules
+    ]
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 def _parse_flags(flags: str, rule_name: str) -> int:
@@ -65,6 +101,14 @@ def parse_rules(raw_json: str) -> list[SummaryRule]:
         raise ValueError(f"Invalid JSON for summary rules at line {exc.lineno}, column {exc.colno}: {exc.msg}") from exc
     if not isinstance(data, list):
         raise ValueError("Summary rules must be list")
+    rules = _parse_rules_payload(data)
+    _validate_roundtrip_integrity(rules)
+    return rules
+
+
+def _parse_rules_payload(data: object) -> list[SummaryRule]:
+    if not isinstance(data, list):
+        raise ValueError("Summary rules must be list")
     rules: list[SummaryRule] = []
     for index, row in enumerate(data):
         if not isinstance(row, dict):
@@ -72,25 +116,42 @@ def parse_rules(raw_json: str) -> list[SummaryRule]:
         for field in ("name", "enabled", "pattern", "flags", "template"):
             if field not in row:
                 raise ValueError(f"Missing field: {field}")
+        if not isinstance(row["name"], str):
+            raise ValueError(f"Rule #{index + 1}: name must be string")
+        if not isinstance(row["enabled"], bool):
+            raise ValueError(f"Rule #{index + 1}: enabled must be boolean")
+        if not isinstance(row["pattern"], str):
+            raise ValueError(f"Rule #{index + 1}: pattern must be string")
+        if not isinstance(row["flags"], str):
+            raise ValueError(f"Rule #{index + 1}: flags must be string")
+        if not isinstance(row["template"], str):
+            raise ValueError(f"Rule #{index + 1}: template must be string")
         rule = SummaryRule(
-            name=str(row["name"]),
-            enabled=bool(row["enabled"]),
-            pattern=str(row["pattern"]),
-            flags=str(row["flags"]),
-            template=str(row["template"]),
+            name=row["name"],
+            enabled=row["enabled"],
+            pattern=row["pattern"],
+            flags=row["flags"],
+            template=row["template"],
         )
         if not rule.name.strip():
             raise ValueError(f"Rule #{index + 1} has empty name")
         if not rule.pattern:
-            raise ValueError(f"Invalid pattern for rule '{rule.name}': pattern cannot be empty")
+            raise ValueError(f"Invalid pattern in rule '{rule.name}':\nPattern: {rule.pattern}\nError: pattern cannot be empty\nPosition: 0")
         if not rule.template.strip():
             raise ValueError(f"Template cannot be empty for rule: {rule.name}")
-        try:
-            rule.compile()
-        except re.error as exc:
-            raise ValueError(f"Invalid pattern for rule '{rule.name}': {exc}") from exc
+        rule.compile()
         rules.append(rule)
     return rules
+
+
+def _validate_roundtrip_integrity(rules: list[SummaryRule]) -> None:
+    roundtrip_json = _serialize_rules(rules)
+    roundtrip_data = json.loads(roundtrip_json)
+    roundtrip_rules = _parse_rules_payload(roundtrip_data)
+    source = [(r.name, r.enabled, r.pattern, r.flags, r.template) for r in rules]
+    loaded = [(r.name, r.enabled, r.pattern, r.flags, r.template) for r in roundtrip_rules]
+    if source != loaded:
+        raise ValueError("Summary rules roundtrip mismatch: rules changed after serialize/deserialize")
 
 
 def validate_rules_json(raw_json: str) -> None:

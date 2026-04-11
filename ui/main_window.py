@@ -26,6 +26,7 @@ from ui.widgets.data_tab import DataTab
 from ui.widgets.search_tab import SearchTab
 
 logger = logging.getLogger(__name__)
+_SUMMARY_RULES_ERROR_MARKERS = ("Invalid JSON for summary rules", "Invalid pattern in rule", "Summary rules roundtrip mismatch")
 
 
 class MainWindow(QMainWindow):
@@ -100,6 +101,22 @@ class MainWindow(QMainWindow):
     def _validate_and_apply_from_dialog(self, dlg: SettingsDialog, persist: bool) -> bool:
         ok, error = dlg.validate_user_settings()
         if not ok:
+            if error and any(marker in error for marker in _SUMMARY_RULES_ERROR_MARKERS):
+                choice = QMessageBox.question(
+                    self,
+                    "Пошкоджені Summary rules",
+                    f"{error}\n\nВідновити Summary rules за замовчуванням?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes,
+                )
+                if choice == QMessageBox.StandardButton.Yes:
+                    dlg.restore_default_summary_rules()
+            if error and any(marker in error for marker in _SUMMARY_RULES_ERROR_MARKERS):
+                ok_after_restore, error_after_restore = dlg.validate_user_settings()
+                if ok_after_restore:
+                    return self._validate_and_apply_from_dialog(dlg, persist)
+                dlg.show_validation_error(error_after_restore or "Невалідні налаштування")
+                return False
             dlg.show_validation_error(error or "Невалідні налаштування")
             return False
 

@@ -8,6 +8,27 @@ from typing import Pattern
 
 from domain.models import PersonExtract
 
+DEFAULT_SUMMARY_RULES: list[dict[str, object]] = [
+    {
+        "name": "Базовий наказ",
+        "enabled": True,
+        "pattern": r"(?P<surname>[А-ЯІЇЄҐ'’-]+)\s+(?P<first>[А-ЯІЇЄҐ][а-яіїєґ'’-]+)\s+(?P<patronymic>[А-ЯІЇЄҐ][а-яіїєґ'’-]+).*(?P<order_num>№\s*\d+)",
+        "flags": "IGNORECASE",
+        "template": "{surname} {first} {patronymic} ({order_num})",
+    }
+]
+
+_SUPPORTED_FLAGS: dict[str, re.RegexFlag] = {
+    "IGNORECASE": re.IGNORECASE,
+    "MULTILINE": re.MULTILINE,
+    "DOTALL": re.DOTALL,
+    "VERBOSE": re.VERBOSE,
+}
+
+
+def default_summary_rules_json() -> str:
+    return json.dumps(DEFAULT_SUMMARY_RULES, ensure_ascii=False, indent=2)
+
 
 @dataclass(slots=True)
 class SummaryRule:
@@ -18,22 +39,50 @@ class SummaryRule:
     template: str
 
     def compile(self) -> Pattern[str]:
-        fl = 0
-        if "IGNORECASE" in self.flags.upper():
-            fl |= re.IGNORECASE
-        return re.compile(self.pattern, fl)
+        return re.compile(self.pattern, _parse_flags(self.flags, self.name))
+
+
+def _parse_flags(flags: str, rule_name: str) -> int:
+    if not isinstance(flags, str):
+        raise ValueError(f"Invalid flags for rule '{rule_name}': expected string")
+    normalized = flags.strip()
+    if not normalized:
+        return 0
+    tokens = [part.strip().upper() for part in re.split(r"[|,\s]+", normalized) if part.strip()]
+    acc = 0
+    unknown = [token for token in tokens if token not in _SUPPORTED_FLAGS]
+    if unknown:
+        raise ValueError(f"Invalid flags for rule '{rule_name}': {', '.join(unknown)}")
+    for token in tokens:
+        acc |= _SUPPORTED_FLAGS[token]
+    return acc
 
 
 def parse_rules(raw_json: str) -> list[SummaryRule]:
-    data = json.loads(raw_json)
+    try:
+        data = json.loads(raw_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON for summary rules at line {exc.lineno}, column {exc.colno}: {exc.msg}") from exc
     if not isinstance(data, list):
         raise ValueError("Summary rules must be list")
     rules: list[SummaryRule] = []
-    for row in data:
+    for index, row in enumerate(data):
+        if not isinstance(row, dict):
+            raise ValueError(f"Rule #{index + 1} must be an object")
         for field in ("name", "enabled", "pattern", "flags", "template"):
             if field not in row:
                 raise ValueError(f"Missing field: {field}")
-        rule = SummaryRule(**row)
+        rule = SummaryRule(
+            name=str(row["name"]),
+            enabled=bool(row["enabled"]),
+            pattern=str(row["pattern"]),
+            flags=str(row["flags"]),
+            template=str(row["template"]),
+        )
+        if not rule.name.strip():
+            raise ValueError(f"Rule #{index + 1} has empty name")
+        if not rule.pattern:
+            raise ValueError(f"Invalid pattern for rule '{rule.name}': pattern cannot be empty")
         if not rule.template.strip():
             raise ValueError(f"Template cannot be empty for rule: {rule.name}")
         try:

@@ -7,6 +7,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from domain.summary_rules import default_summary_rules_json
+
 try:
     from PySide6.QtCore import QStandardPaths
 except Exception:  # pragma: no cover
@@ -18,19 +20,7 @@ RECENT_PATHS_LIMIT = 10
 
 
 def _default_rules_json() -> str:
-    return json.dumps(
-        [
-            {
-                "name": "Базовий наказ",
-                "enabled": True,
-                "pattern": r"(?P<surname>[А-ЯІЇЄҐ'’-]+)\\s+(?P<first>[А-ЯІЇЄҐ][а-яіїєґ'’-]+)\\s+(?P<patronymic>[А-ЯІЇЄҐ][а-яіїєґ'’-]+).*(?P<order_num>№\\s*\\d+)",
-                "flags": "IGNORECASE",
-                "template": "{surname} {first} {patronymic} ({order_num})",
-            }
-        ],
-        ensure_ascii=False,
-        indent=2,
-    )
+    return default_summary_rules_json()
 
 
 @dataclass(slots=True)

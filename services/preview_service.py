@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from infra.docx.docx_reader import read_docx, render_plain_text
+from infra.docx.docx_reader import read_docx
 from services.preview_cache import PreviewCache
 from services.preview_types import PreviewParagraph, StructuredPreview
 
@@ -17,7 +17,7 @@ class PreviewService:
         self.output_root = output_root
         self._text_cache: PreviewCache[str] = PreviewCache(max_entries=cache_size)
         self._source_paragraphs_cache: PreviewCache[list[tuple[int, str]]] = PreviewCache(max_entries=cache_size)
-        self._last_extract_mode = "generated"
+        self._last_extract_mode = "paragraphs_json"
 
     @property
     def last_extract_mode(self) -> str:
@@ -35,21 +35,6 @@ class PreviewService:
         return preview
 
     def get_extract_preview(self, record: dict) -> str:
-        generated_rel = (record.get("generated_rel") or "").strip()
-        generated_path = self.output_root / generated_rel if generated_rel else None
-        if generated_path and generated_path.exists():
-            self._last_extract_mode = "generated"
-            cached = self._text_cache.get(generated_path)
-            if cached is not None:
-                return cached
-            try:
-                preview = render_plain_text(read_docx(generated_path))
-            except Exception:
-                preview = ""
-            if preview:
-                self._text_cache.put(generated_path, preview)
-                return preview
-
         json_text = record.get("paragraphs_json") or "[]"
         try:
             blocks = json.loads(json_text)
@@ -67,7 +52,14 @@ class PreviewService:
                         self._last_extract_mode = "paragraphs_json"
                         return "\n".join(lines)
 
-        paragraphs_text = record.get("paragraphs_text") or []
+        paragraphs_text_raw = record.get("paragraphs_text") or []
+        if isinstance(paragraphs_text_raw, str):
+            try:
+                paragraphs_text = json.loads(paragraphs_text_raw)
+            except Exception:
+                paragraphs_text = [paragraphs_text_raw]
+        else:
+            paragraphs_text = paragraphs_text_raw
         if paragraphs_text:
             lines = [str(line).strip() for line in paragraphs_text if str(line).strip()]
             if lines:

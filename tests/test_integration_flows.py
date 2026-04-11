@@ -18,7 +18,7 @@ def _build_services(tmp_path: Path):
     output.mkdir()
     store = SQLiteStore(tmp_path / "db.sqlite3")
     ops = SafeFileOperator(TempManager())
-    ext = ExtractService(ops, UserSettings().summary_rules_json)
+    ext = ExtractService(UserSettings().summary_rules_json)
     idx = IndexingService(store, ext, source, output, ops)
     return source, output, store, idx
 
@@ -35,24 +35,25 @@ def test_remove_file_cleanup_removes_db_and_generated(tmp_path: Path):
     source, output, store, idx = _build_services(tmp_path)
     f = create_docx(source / "a.docx")
     idx.full_rebuild()
-    assert any(output.iterdir())
+    assert not any(output.iterdir())
     f.unlink()
     idx.full_rebuild()
     assert not store.list_documents()
 
 
 def test_overwrite_extract_rebuild(tmp_path: Path):
-    source, output, _store, idx = _build_services(tmp_path)
+    source, output, store, idx = _build_services(tmp_path)
     source_file = create_docx(source / "a.docx")
     idx.full_rebuild()
-    first = sorted(output.glob("*.docx"))[0]
-    before = first.read_bytes()
-    first.write_bytes(b"override")
+    people = store.search_people({"петренк"})
+    assert people
+    first_rows = store.list_extracts_for_person(people[0]["person_name_norm"])
+    assert first_rows
     source_file.write_bytes(source_file.read_bytes() + b"x")
     idx.full_rebuild()
-    after = first.read_bytes()
-    assert after != b"override"
-    assert after == before
+    second_rows = store.list_extracts_for_person(people[0]["person_name_norm"])
+    assert second_rows
+    assert not sorted(output.glob("*.docx"))
 
 
 def test_preview_flow_uses_paragraphs_json(tmp_path: Path):

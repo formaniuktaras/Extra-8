@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def init_schema(conn: sqlite3.Connection) -> None:
@@ -34,8 +34,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
             document_id INTEGER NOT NULL,
             person_name TEXT NOT NULL,
             person_name_norm TEXT NOT NULL,
-            generated_rel TEXT NOT NULL,
+            generated_rel TEXT,
             paragraphs_json TEXT NOT NULL,
+            paragraphs_text TEXT,
             summary_text TEXT,
             FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE
         );
@@ -47,6 +48,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
 
 def migrate_if_needed(conn: sqlite3.Connection) -> None:
     init_schema(conn)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(extracts)").fetchall()}
+    if "paragraphs_text" not in columns:
+        conn.execute("ALTER TABLE extracts ADD COLUMN paragraphs_text TEXT")
     cur = conn.execute("SELECT value FROM meta WHERE key='schema_version'")
     row = cur.fetchone()
     if not row or int(row[0]) < SCHEMA_VERSION:

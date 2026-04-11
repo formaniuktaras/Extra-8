@@ -101,8 +101,16 @@ class SQLiteStore:
             for e in extracts:
                 conn.execute(
                     """
-                    INSERT INTO extracts(document_id, person_name, person_name_norm, generated_rel, paragraphs_json, summary_text)
-                    VALUES(?,?,?,?,?,?)
+                    INSERT INTO extracts(
+                        document_id,
+                        person_name,
+                        person_name_norm,
+                        generated_rel,
+                        paragraphs_json,
+                        paragraphs_text,
+                        summary_text
+                    )
+                    VALUES(?,?,?,?,?,?,?)
                     """,
                     (
                         document_id,
@@ -110,6 +118,7 @@ class SQLiteStore:
                         e.person_name_norm,
                         e.generated_rel,
                         json.dumps(e.block_indices, ensure_ascii=False),
+                        json.dumps(e.paragraphs_text, ensure_ascii=False),
                         e.summary_text,
                     ),
                 )
@@ -133,13 +142,13 @@ class SQLiteStore:
                 """,
                 (source_key,),
             ).fetchall()
-        return [str(r["generated_rel"]) for r in rows]
+        return [str(r["generated_rel"]) for r in rows if r["generated_rel"]]
 
 
     def list_all_generated_rels(self) -> list[str]:
         with self.connection_factory.connection() as conn:
             rows = conn.execute("SELECT generated_rel FROM extracts").fetchall()
-        return [str(r["generated_rel"]) for r in rows]
+        return [str(r["generated_rel"]) for r in rows if r["generated_rel"]]
 
     def search_people(self, filter_keys: set[str], limit: int = 200) -> list[sqlite3.Row]:
         with self.connection_factory.connection() as conn:

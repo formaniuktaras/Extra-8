@@ -44,8 +44,10 @@ class DataTab(QWidget):
 
         self.tree = SourceTreePanel()
         self.full_preview = PreviewPanel("Документ цілком")
-        self.extract_preview = PreviewPanel("Вміст витягу")
         self.extracts_info_label = QLabel("Оберіть документ")
+        self.selected_person_label = QLabel("")
+        self.selected_summary_label = QLabel("")
+        self.selected_summary_label.setWordWrap(True)
         self.highlight_checkbox = QCheckBox("Підсвічувати абзаци витягу")
         self.highlight_checkbox.setChecked(True)
         self.extracts_list = QListWidget()
@@ -57,11 +59,12 @@ class DataTab(QWidget):
         extracts_layout = QVBoxLayout(extracts_box)
         extracts_layout.setContentsMargins(0, 0, 0, 0)
         extracts_layout.addWidget(self.extracts_info_label)
+        extracts_layout.addWidget(self.selected_person_label)
+        extracts_layout.addWidget(self.selected_summary_label)
         extracts_layout.addWidget(self.highlight_checkbox)
         extracts_layout.addWidget(self.extracts_list)
         self.right_splitter.addWidget(extracts_box)
         self.right_splitter.addWidget(self.full_preview)
-        self.right_splitter.addWidget(self.extract_preview)
 
         self.main_splitter = QSplitter(Qt.Horizontal)
         self.main_splitter.setObjectName("data_main_splitter")
@@ -87,13 +90,14 @@ class DataTab(QWidget):
         self._extract_items = extracts
         self.extracts_list.clear()
         self.extracts_info_label.setText(f"Для цього документа знайдено {len(extracts)} витягів")
+        self.set_extract_summary("", "")
         for item in extracts:
             person = item.get("person_name") or "Без П.І.Б."
             summary = (item.get("summary_text") or "").strip()
             short_summary = (summary[:80] + "…") if len(summary) > 80 else summary
             line = person if not short_summary else f"{person} — {short_summary}"
             self.extracts_list.addItem(line)
-            self.extracts_list.item(self.extracts_list.count() - 1).setToolTip(item.get("generated_rel", ""))
+            self.extracts_list.item(self.extracts_list.count() - 1).setToolTip(item.get("source_rel", ""))
         if extracts:
             self.extracts_list.setCurrentRow(0)
 
@@ -101,3 +105,7 @@ class DataTab(QWidget):
         if 0 <= index < len(self._extract_items):
             return self._extract_items[index]
         return None
+
+    def set_extract_summary(self, person_name: str, summary_text: str) -> None:
+        self.selected_person_label.setText(f"Особа: {person_name}" if person_name else "")
+        self.selected_summary_label.setText(summary_text.strip())

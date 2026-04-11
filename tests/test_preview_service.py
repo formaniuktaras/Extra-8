@@ -51,7 +51,7 @@ def test_preview_cache_invalidates_on_mtime_change(tmp_path: Path, monkeypatch):
     assert calls["n"] == 2
 
 
-def test_extract_preview_falls_back_to_paragraphs_json(tmp_path: Path, monkeypatch):
+def test_search_tab_preview_comes_from_db_text(tmp_path: Path, monkeypatch):
     source_path = create_docx(tmp_path / "s.docx")
     service = PreviewService(output_root=tmp_path)
     monkeypatch.setattr(service, "_load_source_paragraphs", lambda _p: [(0, "zero"), (3, "three")])
@@ -59,19 +59,19 @@ def test_extract_preview_falls_back_to_paragraphs_json(tmp_path: Path, monkeypat
         "generated_rel": "missing.docx",
         "source_abs": str(source_path),
         "paragraphs_json": json.dumps([3]),
-        "paragraphs_text": [],
+        "paragraphs_text": json.dumps(["fallback"]),
     }
 
     assert service.get_extract_preview(record) == "three"
     assert service.last_extract_mode == "paragraphs_json"
 
 
-def test_extract_preview_falls_back_to_paragraphs_text(tmp_path: Path):
+def test_extract_preview_falls_back_to_paragraphs_text_json_string(tmp_path: Path):
     service = PreviewService(output_root=tmp_path)
     record = {
         "generated_rel": "missing.docx",
         "paragraphs_json": "[]",
-        "paragraphs_text": ["line one", "line two"],
+        "paragraphs_text": json.dumps(["line one", "line two"]),
     }
 
     assert service.get_extract_preview(record) == "line one\nline two"

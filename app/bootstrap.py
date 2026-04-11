@@ -35,7 +35,7 @@ def bootstrap():
     store = SQLiteStore(db_path)
     temp_manager = TempManager()
     file_ops = SafeFileOperator(temp_manager)
-    extract_service = ExtractService(file_ops, settings_service.settings.summary_rules_json)
+    extract_service = ExtractService(settings_service.settings.summary_rules_json)
     indexing_service = IndexingService(store, extract_service, source_root, output_root, file_ops)
     search_service = SearchService(store)
     diagnostics_service = DiagnosticsService()

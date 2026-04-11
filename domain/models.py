@@ -27,7 +27,7 @@ class PersonExtract:
     person_name: str
     person_name_norm: str
     block_indices: list[int]
-    generated_rel: str
+    generated_rel: str | None = None
     summary_text: str = ""
     paragraphs_text: list[str] = field(default_factory=list)
 

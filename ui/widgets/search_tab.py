@@ -31,7 +31,7 @@ class SearchTab(QWidget):
         self.results_label = QLabel("0 результатів")
         self.rebuild_btn = QPushButton("Перебудувати індекс")
         self.quick_btn = QPushButton("Швидка перевірка")
-        self.open_source_btn = QPushButton("Відкрити DOCX")
+        self.open_source_btn = QPushButton("Відкрити оригінал")
         self.open_folder_btn = QPushButton("Відкрити теку")
         self.theme_combo = QComboBox()
         self.theme_combo.addItems(["system", "light", "dark"])

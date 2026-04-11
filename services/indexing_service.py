@@ -92,8 +92,6 @@ class IndexingService:
         for key in diff.removed_source_keys:
             if token:
                 token.throw_if_cancelled()
-            stale_paths = [self.output_root / rel for rel in self.store.list_generated_rels_for_source_key(key)]
-            self.file_ops.cleanup_stale_generated_outputs(self.output_root, stale_paths)
             self.store.delete_document_by_source_key(key)
 
         files = diff.new_files + diff.changed_files
@@ -103,7 +101,6 @@ class IndexingService:
                 token.throw_if_cancelled()
             rel = path.relative_to(self.source_root).as_posix()
             source_key = rel.lower()
-            old_generated_rels = set(self.store.list_generated_rels_for_source_key(source_key))
             doc_model = SourceDocument(
                 source_key=source_key,
                 source_rel=rel,
@@ -123,15 +120,7 @@ class IndexingService:
             except RuntimeError:
                 if token and token.is_cancelled:
                     logger.info("Indexing cancelled while processing source: %s", rel)
-                self.file_ops.cleanup_orphan_generated_outputs(self.output_root, self.store.list_all_generated_rels())
                 raise
-
-            new_generated_rels = {e.generated_rel for e in extracts}
-            stale_rels = old_generated_rels - new_generated_rels
-            if stale_rels:
-                self.file_ops.cleanup_stale_generated_outputs(self.output_root, [self.output_root / rel for rel in stale_rels])
 
             if on_progress:
                 on_progress("indexing", i, total)
-
-        self.file_ops.cleanup_orphan_generated_outputs(self.output_root, self.store.list_all_generated_rels())

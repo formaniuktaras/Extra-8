@@ -27,7 +27,6 @@ class AppController(QObject):
         self.preview_service = PreviewService(self.win.indexing_service.output_root)
         self.win.search_tab.extract_preview.setPlainText("Оберіть витяг")
         self.win.data_tab.full_preview.setPlainText("Оберіть документ")
-        self.win.data_tab.extract_preview.setPlainText("Оберіть витяг")
         self._wire_signals()
 
     def _wire_signals(self) -> None:
@@ -37,7 +36,6 @@ class AppController(QObject):
         self.win.search_debounce.timeout.connect(self.run_search)
         s.people_list.clicked.connect(self.person_selected)
         s.extracts_list.clicked.connect(self.extract_selected)
-        s.extracts_list.doubleClicked.connect(self.open_generated_extract)
         s.rebuildRequested.connect(self.rebuild_index)
         s.quickCheckRequested.connect(self.quick_check)
         s.openSourceRequested.connect(self.open_source_docx_from_search)
@@ -94,27 +92,25 @@ class AppController(QObject):
             preview_text = EXTRACT_UNAVAILABLE_TEXT
         self.win.search_tab.extract_preview.setPlainText(preview_text)
         self.win.search_tab.summary_preview.setPlainText(item.get("summary_text") or "")
-        if self.preview_service.last_extract_mode != "generated":
-            self.win.statusBar().showMessage("Відображено резервний текст без generated DOCX")
-
-    def open_generated_extract(self, index) -> None:
-        item = index.data(role=256)
-        if item:
-            self._open_path(Path(self.win.indexing_service.output_root) / item["generated_rel"])
 
     def open_source_docx_from_search(self) -> None:
         idx = self.win.search_tab.extracts_list.currentIndex()
         item = idx.data(role=256) if idx.isValid() else None
         if item and item.get("source_abs"):
-            self._open_path(Path(item["source_abs"]))
+            path = Path(item["source_abs"])
+            if not path.exists():
+                QMessageBox.warning(self.win, "Файл недоступний", f"Оригінальний файл не знайдено:\n{path}")
+                return
+            self._open_path(path)
 
     def open_folder_from_search(self) -> None:
         idx = self.win.search_tab.extracts_list.currentIndex()
         item = idx.data(role=256) if idx.isValid() else None
         if not item:
             return
-        path = Path(item.get("source_abs") or (Path(self.win.indexing_service.output_root) / item["generated_rel"]))
-        self._open_path(path.parent)
+        source_abs = item.get("source_abs")
+        if source_abs:
+            self._open_path(Path(source_abs).parent)
 
     def refresh_tree(self) -> None:
         self.win.source_model.setRootPath(str(self.win.source_root))
@@ -168,14 +164,6 @@ class AppController(QObject):
         elif path.exists():
             if path.suffix.lower() == ".docx":
                 source_key = path.relative_to(self.win.source_root).as_posix().lower()
-                stale_paths = [
-                    Path(self.win.indexing_service.output_root) / rel
-                    for rel in self.win.indexing_service.store.list_generated_rels_for_source_key(source_key)
-                ]
-                self.win.indexing_service.file_ops.cleanup_stale_generated_outputs(
-                    self.win.indexing_service.output_root,
-                    stale_paths,
-                )
                 self.win.indexing_service.store.delete_document_by_source_key(source_key)
             self.win.indexing_service.file_ops.remove_file_and_prune_empty_dirs(path, self.win.source_root)
         self.refresh_tree()
@@ -282,8 +270,8 @@ class AppController(QObject):
         rel = source_path.relative_to(self.win.source_root).as_posix().lower()
         docs = self.win.search_service.list_extracts_for_source(rel)
         if not docs:
+            self.win.data_tab.set_extract_items([])
             self.win.data_tab.extracts_info_label.setText("Для цього документа витягів не знайдено")
-            self.win.data_tab.extract_preview.setPlainText("Оберіть витяг")
             self._render_source_preview(StructuredPreview(paragraphs=[], plain_text=self.preview_service.get_source_preview(source_path)))
             return
         self.win.data_tab.set_extract_items(docs)
@@ -302,11 +290,13 @@ class AppController(QObject):
     def _render_data_extract_by_index(self, idx: int, source_path: Path) -> None:
         extract = self.win.data_tab.current_extract(idx)
         if not extract:
-            self.win.data_tab.extract_preview.setPlainText("Оберіть витяг")
+            self.win.data_tab.set_extract_summary("", "")
             self._render_source_preview(self.preview_service.build_highlighted_source_preview(source_path, []))
             return
-        extract_text = self.preview_service.get_extract_preview(extract)
-        self.win.data_tab.extract_preview.setPlainText(extract_text or "Витяг відсутній")
+        self.win.data_tab.set_extract_summary(
+            extract.get("person_name") or "",
+            extract.get("summary_text") or "",
+        )
         try:
             selected_indices = json.loads(extract.get("paragraphs_json") or "[]")
             if not isinstance(selected_indices, list):
@@ -315,8 +305,6 @@ class AppController(QObject):
             selected_indices = []
         structured = self.preview_service.build_highlighted_source_preview(source_path, selected_indices)
         self._render_source_preview(structured)
-        if self.preview_service.last_extract_mode != "generated":
-            self.win.statusBar().showMessage("Відображено резервний текст без generated DOCX")
 
     def _render_source_preview(self, structured: StructuredPreview) -> None:
         panel = self.win.data_tab.full_preview

@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 
 from core.config import AppConfig
 from core.settings import UserSettings
+from domain.summary_rules import validate_rules_json
 
 
 class SettingsDialog(QDialog):
@@ -61,7 +62,7 @@ class SettingsDialog(QDialog):
         self.preview_font_size.setRange(8, 48)
         self.preview_font_size.setValue(settings.preview_font_size)
         self.scale_edit = QDoubleSpinBox()
-        self.scale_edit.setRange(0.75, 3.0)
+        self.scale_edit.setRange(0.75, 2.0)
         self.scale_edit.setSingleStep(0.05)
         self.scale_edit.setValue(settings.scale_factor)
 
@@ -160,8 +161,8 @@ class SettingsDialog(QDialog):
     def validate(self) -> tuple[bool, str | None]:
         if not QColor(self.accent_edit.text().strip()).isValid():
             return False, "Некоректний accent color"
-        if not (0.75 <= float(self.scale_edit.value()) <= 3.0):
-            return False, "Scale має бути в межах 0.75..3.0"
+        if not (0.75 <= float(self.scale_edit.value()) <= 2.0):
+            return False, "Scale має бути в межах 0.75..2.0"
         if not (8 <= int(self.ui_font_size.value()) <= 48):
             return False, "Некоректний UI font size"
         if not (8 <= int(self.preview_font_size.value()) <= 48):
@@ -182,6 +183,9 @@ class SettingsDialog(QDialog):
             payload = json.loads(self.rules_edit.toPlainText() or "[]")
             if not isinstance(payload, list):
                 return False, "Summary rules мають бути JSON-масивом"
+            validate_rules_json(self.rules_edit.toPlainText() or "[]")
+        except ValueError as exc:
+            return False, str(exc)
         except Exception:
             return False, "Summary rules містять невалідний JSON"
         return True, None

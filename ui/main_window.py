@@ -9,10 +9,13 @@ from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QStatusBar
 
 from core.settings import decode_bytes, encode_bytes
-from services.app_config_service import AppConfigService
-from services.diagnostics_service import DiagnosticsService
-from services.search_service import SearchService
-from services.settings_service import SettingsService
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from services.app_config_service import AppConfigService
+    from services.diagnostics_service import DiagnosticsService
+    from services.search_service import SearchService
+    from services.settings_service import SettingsService
 from ui.controllers.app_controller import AppController
 from ui.dialogs.about_dialog import AboutDialog
 from ui.dialogs.diagnostics_dialog import DiagnosticsDialog
@@ -33,10 +36,10 @@ class MainWindow(QMainWindow):
     def __init__(
         self,
         indexing_service,
-        search_service: SearchService,
-        diagnostics_service: DiagnosticsService,
-        settings_service: SettingsService,
-        app_config_service: AppConfigService,
+        search_service: "SearchService",
+        diagnostics_service: "DiagnosticsService",
+        settings_service: "SettingsService",
+        app_config_service: "AppConfigService",
         source_root: Path,
     ) -> None:
         super().__init__()
